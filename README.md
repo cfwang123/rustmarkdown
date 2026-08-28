@@ -1,64 +1,66 @@
 # rustmarkdown
 
-Windows 优先的 Markdown 预览 / 编辑器，用 Rust + egui 原生绘制，**不依赖浏览器内核**。
-三种视图：代码、侧边预览、预览。支持多标签、拖放打开文件 / 文件夹 / `.lnk` 快捷方式。
-也可只读打开 **DOC / DOCX / PDF / 图片**（对齐 docview）。
+[中文说明](README.zh.md)
 
-参考 DocviewWPF 的纯 WPF 渲染路线（解析块带源行号、三模式切换）。
+A Windows-first Markdown preview / editor, drawn natively with Rust + egui. **No browser engine.**
+Three views: source, side-by-side preview, and preview. Multi-tab; drag-and-drop files, folders, and `.lnk` shortcuts.
+Also opens **DOC / DOCX / PDF / images** read-only (aligned with docview).
 
-## 当前进度（v1.0.1）
+Follows the DocviewWPF native-render approach (block parse with source line numbers, three view modes).
 
-已实现：
+## Status (v1.0.1)
 
-- 多标签：打开 / 关闭 / 切换 / 按路径去重 / 拖动排序 / 中键关闭；长文件名裁切显示
-- 顶部菜单栏（文件 / 查看 / 工具 / 帮助）与图标工具栏（悬停显示功能名与快捷键）
-- 三模式切换（代码、侧边预览、预览；侧栏可拖分隔条）
-- 打开、保存、另存为；未保存关闭询问
-- 拖放文件 / 文件夹 / `.lnk` 快捷方式打开（含中文路径）；文件夹进侧栏目录树；无路径时回退写入临时文件再打开；失败弹错误框；命令行传入路径。已有实例在跑时，再打开文件会转到该窗口用新标签打开（不新开进程）
-- Markdown 解析（GFM 子集，块带源行号）与原生预览渲染（含 `**[链接](url)**` 等嵌套行内）
-- 表格列宽对齐 mdview：按内容显示宽分配，短列钉死、长列分剩余；无空白短列不竖排拆字
-- 围栏代码语法高亮（syntect + two-face：C/C++/C#、JS/TS、Python、Rust、Go、Java、Shell/PowerShell、SQL、JSON/YAML/TOML、HTML/CSS、Dockerfile 等；`cs`/`py`/`yml`/`ps1` 等别名）
-- ` ```mermaid ` 围栏：纯 Rust 渲染流程图 / 时序图等（无浏览器内核；不支持的语法回退为源码 + 错误）
-- 程序图标（窗口标题栏 / 任务栏 / exe 文件）
-- Release / 直接运行 exe 不弹出控制台窗口
-- 参数设置（Ctrl+,）：Markdown Tab 宽度、标题自动编号、图片最大显示宽度；保存在 `%LocalAppData%\rustmarkdown\settings.json`
-- 无参数启动恢复上次关闭时打开的文件、视图模式与滚动位置（`session.json`），并恢复目录树工作区根目录；之后再次打开同一文件也会恢复上次的模式与位置；命令行传入路径则按参数打开（传入的是文件时仍恢复上次工作区）
-- 图片双击弹层预览（滚轮缩放、拖拽平移、Esc / 点背景关闭）；右上仅关闭按钮，无顶栏黑条；右键复制图片 / 复制为文件
-- 预览任务列表（`- [ ]` / `- [x]`）只读显示
-- 预览表格为连续网格（表头底色、共用边框），不用单元格小框
-- 预览/编辑滚动条贴窗口右边缘、固定展开宽度（不随悬停变窄）；滚轮滚动加快；拖选文字时滚轮仍有效
-- 代码编辑区按窗格宽度 break-word 折行（长行不再横向滚动）；预览段落换行从行首排，不够放下整词则先填满当前行再拆；预览中英混排按脚本拆段并按行高底对齐（拉丁 Ubuntu 下移基线、汉字雅黑）；源码 Consolas 下移基线对齐雅黑；源码空行在预览中保留为一段空隙
-- 代码编辑区背景纯白 `#ffffff`
-- 预览粗体 / 粗斜体 / 标题加粗（雅黑 Bold）；行内 `<font>` 色与字重
-- Markdown 源码语法高亮（标题分层色、标记灰、任务框 `[ ]` 淡灰底 / `[x]` 淡绿底、行内 code/链接、围栏代码 syntect）；源码等宽优先 Consolas（接近 GVIM），标题与 `**粗体**` 用 Consolas Bold；行距为字号 × 1.45；围栏代码块整块灰底（铺满行宽）；拖选复用已排版结果，避免大文件卡顿
-- 预览按标题折叠内容；围栏代码超过 10 行默认折叠（Mermaid 不折），底部灰字行点击切换（`... <CR> collapse` / `expand`，对齐 mdview）；预览代码框拉满内容宽度
-- 左侧侧栏（F4）：「资源管理器」文件夹树（懒加载，点击选中整项、不可拖选文字）+ 「大纲」章节树；筛选、滚动高亮、点击跳转；宽度与开关写入 settings.json
-- Ctrl+F 查找：不区分大小写，F3 / Shift+F3 上下一个；源码与预览高亮
-- 文本编码自动检测（UTF-8 / GBK / UTF-16 等），保存按原编码；外部修改监视并提示重载
-- 标签拖拽对齐 docview：条内跟手排序；拖离标签栏立刻拆成独立窗口并跟手（不必松手）；拖到其它窗口标签栏立即合并；右键「移到新窗口」仍可用。仅 1 个标签时不可拆窗
-- 文件菜单「历史文件」：最近 20 个打开过的文件，写入 `%LocalAppData%\rustmarkdown\settings.json`
-- 侧边预览双向同步滚动（滚轮/拖滚动条，程序化滚动后 650ms 只抑制对侧回传）
-- 侧边预览：当前光标所在块左侧蓝条；编辑区有选区时状态栏显示「已选择 N 字」
-- 状态栏显示模式 / 行数 / 编码 / Tab 宽（不显示完整文件路径）；打开、切换、保存提示只用文件名
-- 侧边预览互相对应选区：左边选文字时右边对应文字淡蓝底；右边拖选时左边对应源码淡蓝底
-- Ctrl+Z / Ctrl+Y 撤销重做后光标留在改动处，视口不再跳到更早的编辑位置
-- 预览表格右对齐 / 居中：文字靠右或居中，字序与源码一致（不用 RTL 布局，避免「斜体」变成「体斜」）
-- 窗口标题栏显示版本号（如 `demo.md — rustmarkdown v1.0.1`）
-- 后退 / 前进（工具栏、查看菜单、Alt+← / Alt+→）：大纲点击、`#锚点`、文内相对 Markdown 链接记入历史（上限 50）
-- **DOC / DOCX 只读预览**（对齐 docview）：转为 Markdown 后按 A4 竖向分页（灰底白页、页间距 12）；Ctrl+滚轮 / Ctrl++- / Ctrl+0 缩放（1.0 = A4 100%）；PgUp/PgDn 翻页、方向键滚动；大纲可跳转；不可改原文件，可用「另存为」导出 `.md`
-- **PDF 只读预览**（对齐 docview 连续页）：pdfium 按页光栅化，竖向一页接一页；打开默认 100%；Ctrl+滚轮 / Ctrl++- / Ctrl+0 缩放；PgUp/PgDn 翻页、方向键滚动；拖选文字为 Sumatra 式黄底高亮，Ctrl+C / 右键复制所选文字；大纲为页列表；双击放大、右键复制图片
-- **图片文件只读预览**（对齐 docview ImageViewer）：打开 png / jpg / jpeg / gif / bmp / ico / tif / tiff / webp；打开时按窗口居中适应（contain）；滚轮缩放（光标为中心）、拖拽平移；双击适合窗口 ⇄ 100%；`[` / `]` 旋转 90°；Ctrl+C / 右键复制图片或复制为文件；另存为 png/jpg/bmp；不可覆盖原文件
-- `node pack.js` 一键编译并打包到 `release/rustmarkdown_x.x.x.7z`
+Implemented:
 
-后续：深浅主题、缩放、按窗口会话恢复。
+- Multi-tab: open / close / switch / path de-dupe / drag reorder / middle-click close; long names are clipped
+- Menu bar (File / View / Tools / Help) and icon toolbar (hover shows name and shortcut)
+- Three modes (source, side-by-side, preview; resizable splitter)
+- Open, save, save as; prompt on unsaved close
+- Drag-and-drop files / folders / `.lnk` (including CJK paths); folders load into the sidebar tree; missing paths fall back to a temp file; errors show a dialog; CLI paths. If an instance is already running, a new file opens as a tab in that window (no second process)
+- Markdown parse (GFM subset, source line numbers) and native preview (including nested inlines such as `**[link](url)**`)
+- Table column widths aligned with mdview: allocate by content width; short columns stay fixed, long columns share the remainder; no vertical CJK split on short empty columns
+- Fenced-code highlight (syntect + two-face: C/C++/C#, JS/TS, Python, Rust, Go, Java, Shell/PowerShell, SQL, JSON/YAML/TOML, HTML/CSS, Dockerfile, and aliases such as `cs` / `py` / `yml` / `ps1`)
+- ` ```mermaid ` fences: flowcharts / sequence diagrams in pure Rust (no browser; unsupported syntax falls back to source + error)
+- App icon (title bar / taskbar / exe)
+- Release / double-click exe: no console window
+- Settings (Ctrl+,): Markdown tab width, heading auto-number, max image width; stored in `%LocalAppData%\rustmarkdown\settings.json`
+- Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root; reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
+- Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file
+- Preview task lists (`- [ ]` / `- [x]`) read-only
+- Preview tables as a continuous grid (header fill, shared borders), not per-cell rounded boxes
+- Preview/editor scrollbars flush to the window edge, fixed expanded width; faster wheel; wheel still works while selecting text
+- Source wraps by pane width (break-word; no horizontal scroll on long lines); preview wraps from the start of the line and splits a word only after filling the line; CJK/Latin in preview is split by script and bottom-aligned (Latin Ubuntu baseline shifted down, CJK YaHei); source Consolas baseline shifted to match YaHei; blank source lines stay as gaps in preview
+- Source editor background solid white `#ffffff`
+- Preview bold / bold-italic / heading weight (YaHei Bold); inline `<font>` color and weight
+- Markdown source highlight (heading colors, gray markers, task boxes `[ ]` light-gray fill / `[x]` light-green fill, inline code/links, fenced syntect); monospace prefers Consolas (GVIM-like); headings and `**bold**` use Consolas Bold; line height is font size × 1.45; fenced blocks get a full-width gray fill; drag-select reuses layout to avoid stutter on large files
+- Preview fold by heading; fenced code over 10 lines starts folded (not Mermaid); click the gray footer to toggle (`... <CR> collapse` / `expand`, aligned with mdview); code boxes stretch to content width
+- Left sidebar (F4): Explorer folder tree (lazy load; click selects the row, no text drag) + Outline; filter, scroll highlight, click to jump; width and on/off in settings.json
+- Ctrl+F find: case-insensitive; F3 / Shift+F3 next/prev; highlight in source and preview
+- Encoding auto-detect (UTF-8 / GBK / UTF-16, …); save in original encoding; watch external changes and prompt reload
+- Tab drag aligned with docview: reorder in-bar; tearing off the bar immediately creates a new window that follows the cursor; drop on another window’s tab bar to merge; context menu “Move to new window”. Cannot tear off when there is only one tab
+- File menu “Recent files”: last 20 paths, in `%LocalAppData%\rustmarkdown\settings.json`
+- Side-by-side synced scroll (wheel / scrollbar; 650 ms suppress after programmatic scroll)
+- Side-by-side: blue bar on the block under the caret; status bar shows “N selected” when the editor has a selection
+- Status bar: mode / line count / encoding / tab width (no full path); open / switch / save toasts use the file name only
+- Cross-pane selection: selecting on the left highlights the matching preview text; dragging on the right highlights matching source
+- After Ctrl+Z / Ctrl+Y the caret stays at the change; the viewport does not jump to an older edit
+- Preview table right / center align: text is aligned, glyph order matches source (no RTL, so “斜体” does not become “体斜”)
+- Title bar shows the version (e.g. `demo.md — rustmarkdown v1.0.1`)
+- Back / forward (toolbar, View menu, Alt+← / Alt+→): outline clicks, `#anchors`, and in-doc relative Markdown links (cap 50)
+- **DOC / DOCX read-only** (aligned with docview): convert to Markdown and paginate as A4 portrait (gray canvas, white pages, 12 px gap); Ctrl+wheel / Ctrl++- / Ctrl+0 zoom (1.0 = A4 100%); PgUp/PgDn page, arrows scroll; outline jump; original file is not edited; Save As can export `.md`
+- **PDF read-only** (aligned with docview continuous pages): pdfium raster per page, stacked vertically; open at 100%; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; PgUp/PgDn page, arrows scroll; text select is Sumatra-style yellow highlight; Ctrl+C / right-click copy selected text; outline is a page list; double-click zoom, right-click copy image
+- **Image file read-only** (aligned with docview ImageViewer): png / jpg / jpeg / gif / bmp / ico / tif / tiff / webp; open contain-fit to the window; wheel zoom (cursor-centered), pan; double-click toggles fit ⇄ 100%; `[` / `]` rotate 90°; Ctrl+C / right-click copy image or as file; Save As png/jpg/bmp; does not overwrite the original
+- `node pack.js` builds Release and writes `release/rustmarkdown_x.x.x.7z`
 
-## 要求
+Later: light/dark theme, UI zoom, per-window session restore.
 
-- Windows x64（其它平台可编译，未作为主测试目标）
-- Rust 1.80+（建议 rustup stable）
-- 打包：Node.js、7-Zip（`7z` 在 PATH 中，或安装到默认目录）
+## Requirements
 
-## 编译与运行
+- Windows x64 (other platforms may build; not the primary test target)
+- Rust 1.80+ (rustup stable recommended)
+- Pack: Node.js, 7-Zip (`7z` on PATH, or the default install location)
+
+## Build and run
 
 ```bat
 cargo build --release
@@ -66,59 +68,59 @@ cargo run -- path\to\file.md
 node pack.js
 ```
 
-输出：`target/release/rustmarkdown.exe`。
+Output: `target/release/rustmarkdown.exe`.
 
-改完代码后用 `cargo build --release`（不要 debug）。Windows 下编译 / `cargo run` 会在链接前结束正在运行的 `rustmarkdown.exe`（避免 exe 被占用）。
+Always use `cargo build --release` (not debug). On Windows, build / `cargo run` kills a running `rustmarkdown.exe` before linking so the exe is not locked.
 
-`node pack.js`：结束正在运行的 `rustmarkdown.exe` → `cargo build --release` → 生成 `release/rustmarkdown_x.x.x.7z`（版本号读 `Cargo.toml`；包内为 exe、`pdfium.dll`、README.md、CHANGELOG.md）。`release/` 已记入 `.gitignore`，不提交。
+`node pack.js`: kill running `rustmarkdown.exe` → `cargo build --release` → `release/rustmarkdown_x.x.x.7z` (version from `Cargo.toml`; archive contains the exe, `pdfium.dll`, README.md, README.zh.md, CHANGELOG.md). `release/` is gitignored.
 
-`--selftest`：跑解析器 / 表格列宽自检（退出码 0 通过）。exe 为 GUI 子系统，建议用 `cargo test` 看输出：
+`--selftest`: parser / table-width checks (exit 0 = pass). The exe is a GUI subsystem binary; use `cargo test` to see output:
 
 ```bat
 cargo test
 cargo run -- --selftest
 ```
 
-## 快捷键
+## Shortcuts
 
-| 键 | 功能 |
-|----|------|
-| Ctrl+N | 新建 |
-| Ctrl+O | 打开文件（Markdown / Word / PDF / 图片 / `.lnk`） |
-| Ctrl+Shift+O | 打开文件夹（侧栏目录树工作区） |
-| Ctrl+F | 查找 |
-| F3 / Shift+F3 | 下一个 / 上一个查找命中 |
-| Ctrl+S / Ctrl+Shift+S | 保存 / 另存为 |
-| Ctrl+W | 关闭标签 |
-| Ctrl+Shift+T | 重开最近关闭的标签 |
-| Ctrl+Tab / Ctrl+Shift+Tab | 下一个 / 上一个标签 |
-| Ctrl+1 / Ctrl+2 / Ctrl+3 | 代码 / 侧边预览 / 预览 |
-| Ctrl+E | 预览 ↔ 上次编辑模式 |
-| Ctrl+, | 参数设置 |
-| Ctrl+Z / Ctrl+Y | 撤销 / 重做 |
-| Ctrl+C | 复制（PDF 有文字选区时复制所选文字；图片标签复制整图） |
-| Ctrl+滚轮、Ctrl++ / Ctrl+-、Ctrl+0 | PDF / Word / 图片缩放 / 恢复 100% |
-| 滚轮（图片标签） | 缩放（无需 Ctrl；光标为中心） |
-| [ / ] | 图片逆时针 / 顺时针旋转 90° |
-| PgUp / PgDn | 预览翻页（PDF / Word 按页；Markdown 按一屏） |
-| ↑ ↓ ← → | 预览滚动（编辑区仍移动光标） |
-| F4 | 目录侧栏开关 |
-| Alt+← / Alt+→ | 后退 / 前进 |
+| Key | Action |
+|-----|--------|
+| Ctrl+N | New |
+| Ctrl+O | Open file (Markdown / Word / PDF / image / `.lnk`) |
+| Ctrl+Shift+O | Open folder (sidebar workspace) |
+| Ctrl+F | Find |
+| F3 / Shift+F3 | Next / previous find hit |
+| Ctrl+S / Ctrl+Shift+S | Save / Save as |
+| Ctrl+W | Close tab |
+| Ctrl+Shift+T | Reopen last closed tab |
+| Ctrl+Tab / Ctrl+Shift+Tab | Next / previous tab |
+| Ctrl+1 / Ctrl+2 / Ctrl+3 | Source / side-by-side / preview |
+| Ctrl+E | Preview ↔ last edit mode |
+| Ctrl+, | Settings |
+| Ctrl+Z / Ctrl+Y | Undo / redo |
+| Ctrl+C | Copy (selected PDF text, or the whole image on an image tab) |
+| Ctrl+wheel, Ctrl++ / Ctrl+-, Ctrl+0 | PDF / Word / image zoom / reset 100% |
+| Wheel (image tab) | Zoom (no Ctrl; cursor-centered) |
+| [ / ] | Image rotate 90° CCW / CW |
+| PgUp / PgDn | Preview page (PDF / Word by page; Markdown by screen) |
+| ↑ ↓ ← → | Preview scroll (editor still moves the caret) |
+| F4 | Sidebar on/off |
+| Alt+← / Alt+→ | Back / forward |
 
-## 项目结构
+## Layout
 
 ```text
 src/
-  main.rs     入口与命令行
-  app.rs      窗口状态、菜单栏、工具栏、快捷键、拖放、跳转历史
-  nav.rs      后退 / 前进栈
-  tabs.rs     标签栏（跟手排序 / 离条拆窗 / 拖入合并）
-  workspace.rs 文件夹工作区目录树
-  doc.rs      文档会话 / 标签 / 模式（Markdown / Word / PDF / 图片）
-  parser/     Markdown 解析、表格列宽、标题编号
-  view/       编辑器、预览渲染、PDF 连续页（选字）、图片文件预览、查找条、大纲侧栏、MD 源码着色、围栏高亮、工具栏图标、字体
-  io/         文件读写与编码检测、文件监视、Word 转 MD、PDF/pdfium 光栅化与抽字、图片缓存、Mermaid 渲染、.lnk 解析、参数设置
-assets/       程序图标 icon.png / icon.ico
-native/pdfium pdfium.dll（构建时复制到 exe 旁；不提交）
-pack.js       编译 Release 并打包到 release/rustmarkdown_x.x.x.7z
+  main.rs      entry and CLI
+  app.rs       window state, menus, toolbar, shortcuts, drop, jump history
+  nav.rs       back / forward stack
+  tabs.rs      tab bar (follow-drag reorder / tear-off / merge)
+  workspace.rs folder workspace tree
+  doc.rs       document session / tab / mode (Markdown / Word / PDF / image)
+  parser/      Markdown parse, table widths, heading numbers
+  view/        editor, preview, PDF pages (text select), image preview, find bar, outline, MD source highlight, fence highlight, toolbar icons, fonts
+  io/          files and encoding, file watch, Word→MD, PDF/pdfium raster and text, image cache, Mermaid, .lnk, settings
+assets/        app icons icon.png / icon.ico
+native/pdfium  pdfium.dll (copied next to the exe at build; not committed)
+pack.js        Release build and pack to release/rustmarkdown_x.x.x.7z
 ```

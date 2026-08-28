@@ -31,7 +31,7 @@
 		}
 		if (fs.existsSync(pdfiumDll))
 			runCmd(sevenZip, ['a', '-t7z', '-mx=9', archivePath, 'pdfium.dll'], path.join(root, 'target', 'release'));
-		runCmd(sevenZip, ['a', '-t7z', '-mx=9', archivePath, 'README.md', 'CHANGELOG.md'], root);
+		runCmd(sevenZip, ['a', '-t7z', '-mx=9', archivePath, 'README.md', 'README.zh.md', 'CHANGELOG.md'], root);
 		if (!fs.existsSync(archivePath))
 			fail('archive not created: ' + archivePath);
 		console.log(archivePath);
