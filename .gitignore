@@ -42,3 +42,4 @@ Desktop.ini
 # Local secrets (do not commit keys or machine paths)
 .env
 .env.*
+AGENTS.md
