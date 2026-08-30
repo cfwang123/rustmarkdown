@@ -90,6 +90,10 @@ const BASE_FS: f32 = 14.0;
 const BLANK_H: f32 = BASE_FS * 1.45;
 const CODE_PAD_X: f32 = 4.0;
 const CODE_ROUND: f32 = 3.0;
+/// 等宽字形墨水在 metrics 上半，按字号下移，让字落在灰底中间。
+const CODE_INK_DOWN: f32 = 0.24;
+/// 灰底相对行再略下移，对齐汉字字身。
+const CODE_CHIP_DOWN: f32 = 0.10;
 const CODE_CHIP: Color32 = Color32::from_rgb(0xF3, 0xF4, 0xF6);
 const CODE_FG: Color32 = Color32::from_rgb(0x1F, 0x29, 0x37);
 const HEAD_SIZES: [f32; 6] = [28.0, 21.7, 17.5, 15.4, 14.0, 14.0];
@@ -1607,7 +1611,7 @@ fn add_inline_code(ui: &mut Ui, text: &str, size: f32, hint: &str) {
         let w = (galley.size().x + CODE_PAD_X * 2.0).max(1.0);
         let h = row_h.max(galley.size().y);
         let bg = if hit { SEL_BG } else { CODE_CHIP };
-        paint_code_chip(ui, galley, w, h, chip_h, bg);
+        paint_code_chip(ui, galley, w, h, chip_h, bg, size);
         i += n;
     }
 }
@@ -1619,17 +1623,24 @@ fn paint_code_chip(
     h: f32,
     chip_h: f32,
     bg: Color32,
+    size: f32,
 ) {
     let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    let galley_top = rect.center().y - galley.size().y * 0.5;
+    let chip_down = size * CODE_CHIP_DOWN;
     let origin = pos2(
         rect.left() + CODE_PAD_X,
-        rect.center().y - galley.size().y * 0.5,
+        galley_top + size * CODE_INK_DOWN + chip_down,
     );
     let painter = ui.painter();
     for row in &galley.rows {
-        let rr = row.rect().translate(origin.to_vec2());
+        let rr = row.rect();
         let chip_w = (rr.width() + CODE_PAD_X * 2.0).max(1.0);
-        let chip = Rect::from_center_size(rr.center(), vec2(chip_w, chip_h.min(h)));
+        let chip_cy = galley_top + rr.center().y + chip_down;
+        let chip = Rect::from_center_size(
+            pos2(rect.left() + CODE_PAD_X + rr.width() * 0.5, chip_cy),
+            vec2(chip_w, chip_h.min(h)),
+        );
         painter.rect_filled(chip, CODE_ROUND, bg);
     }
     painter.galley(origin, galley, CODE_FG);
