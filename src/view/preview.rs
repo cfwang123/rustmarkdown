@@ -88,6 +88,10 @@ impl Default for PreviewState {
 const BASE_FS: f32 = 14.0;
 /// 源码空行在预览中占的高度（对齐 mdview 空行 / docview 列表 line-height 1.45）。
 const BLANK_H: f32 = BASE_FS * 1.45;
+const CODE_PAD_X: f32 = 4.0;
+const CODE_ROUND: f32 = 3.0;
+const CODE_CHIP: Color32 = Color32::from_rgb(0xF3, 0xF4, 0xF6);
+const CODE_FG: Color32 = Color32::from_rgb(0x1F, 0x29, 0x37);
 const HEAD_SIZES: [f32; 6] = [28.0, 21.7, 17.5, 15.4, 14.0, 14.0];
 const LIST_INDENT_STEP: f32 = 25.0;
 const CODE_FOLD_LINES: usize = 10;
@@ -1393,13 +1397,9 @@ fn inlines_natural_width(
             MdSpanKind::BoldItalic => pieces_width(ui, &sp.text, |t| {
                 span_style(t, &sp.href, size, color, true, true)
             }),
-            MdSpanKind::Code => pieces_width(ui, &sp.text, |t| {
-                RichText::new(t)
-                    .size(size * 0.9)
-                    .monospace()
-                    .color(c(0x1F, 0x29, 0x37))
-                    .background_color(c(0xF3, 0xF4, 0xF6))
-            }),
+            MdSpanKind::Code => {
+                CODE_PAD_X * 2.0 + pieces_width(ui, &sp.text, |t| code_rt(t, size))
+            }
             MdSpanKind::Mark => pieces_width(ui, &sp.text, |t| {
                 RichText::new(t)
                     .size(size)
@@ -1534,6 +1534,107 @@ fn add_flow_text(
     clicked
 }
 
+fn code_rt(text: &str, size: f32) -> RichText {
+    RichText::new(text)
+        .size(size * 0.9)
+        .family(theme::preview_mono_family())
+        .color(CODE_FG)
+}
+
+fn add_inline_code(ui: &mut Ui, text: &str, size: f32, hint: &str) {
+    let row_h = size * 1.45;
+    let chip_h = (size * 1.2).min(row_h);
+    let pieces = wrap_pieces(text);
+    let mut i = 0;
+    while i < pieces.len() {
+        let p0 = pieces[i];
+        if p0.is_empty() {
+            i += 1;
+            continue;
+        }
+        let hit = piece_in_sel(hint, p0);
+        maybe_break_word(ui, &code_rt(p0, size));
+        let rem = ui.available_size_before_wrap().x;
+        let mut acc = String::from(p0);
+        let mut n = 1;
+        let w0 = rich_width(ui, &code_rt(&acc, size)) + CODE_PAD_X * 2.0;
+        if !(rem.is_finite() && w0 > rem + 1.0) {
+            let mut used = w0;
+            while i + n < pieces.len() {
+                let p = pieces[i + n];
+                if p.is_empty() {
+                    n += 1;
+                    continue;
+                }
+                if piece_in_sel(hint, p) != hit {
+                    break;
+                }
+                let ka = script_kind(&acc);
+                let kp = script_kind(p);
+                if ka != 0 && kp != 0 && ka != kp {
+                    break;
+                }
+                let wp = rich_width(ui, &code_rt(p, size));
+                if rem.is_finite() && used + wp > rem + 1.0 {
+                    break;
+                }
+                acc.push_str(p);
+                used += wp;
+                n += 1;
+            }
+        }
+        let rt = code_rt(&acc, size);
+        let rem = ui.available_size_before_wrap().x;
+        let natural = egui::WidgetText::from(rt.clone()).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::FontSelection::Default,
+        );
+        let need = natural.size().x + CODE_PAD_X * 2.0;
+        let wrapping = rem.is_finite() && need > rem + 1.0;
+        let galley = if wrapping {
+            let wrap_w = (rem - CODE_PAD_X * 2.0).max(1.0);
+            egui::WidgetText::from(rt).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Wrap),
+                wrap_w,
+                egui::FontSelection::Default,
+            )
+        } else {
+            natural
+        };
+        let w = (galley.size().x + CODE_PAD_X * 2.0).max(1.0);
+        let h = row_h.max(galley.size().y);
+        let bg = if hit { SEL_BG } else { CODE_CHIP };
+        paint_code_chip(ui, galley, w, h, chip_h, bg);
+        i += n;
+    }
+}
+
+fn paint_code_chip(
+    ui: &mut Ui,
+    galley: std::sync::Arc<egui::Galley>,
+    w: f32,
+    h: f32,
+    chip_h: f32,
+    bg: Color32,
+) {
+    let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    let origin = pos2(
+        rect.left() + CODE_PAD_X,
+        rect.center().y - galley.size().y * 0.5,
+    );
+    let painter = ui.painter();
+    for row in &galley.rows {
+        let rr = row.rect().translate(origin.to_vec2());
+        let chip_w = (rr.width() + CODE_PAD_X * 2.0).max(1.0);
+        let chip = Rect::from_center_size(rr.center(), vec2(chip_w, chip_h.min(h)));
+        painter.rect_filled(chip, CODE_ROUND, bg);
+    }
+    painter.galley(origin, galley, CODE_FG);
+}
+
 fn show_spans(
     ui: &mut Ui,
     spans: &[MdSpan],
@@ -1629,22 +1730,7 @@ fn one_span(
                 hint,
             );
         }
-        MdSpanKind::Code => {
-            add_flow_text(
-                ui,
-                &sp.text,
-                size,
-                |t, hit| {
-                    RichText::new(t)
-                        .size(size * 0.9)
-                        .monospace()
-                        .color(c(0x1F, 0x29, 0x37))
-                        .background_color(if hit { SEL_BG } else { c(0xF3, 0xF4, 0xF6) })
-                },
-                None,
-                hint,
-            );
-        }
+        MdSpanKind::Code => add_inline_code(ui, &sp.text, size, hint),
         MdSpanKind::Mark => {
             add_flow_text(
                 ui,

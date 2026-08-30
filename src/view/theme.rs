@@ -22,6 +22,11 @@ pub fn latin_family() -> FontFamily {
     FontFamily::Name("preview_latin".into())
 }
 
+/// 预览行内代码：Consolas 副本，不下移基线（灰底芯片内垂直居中）。
+pub fn preview_mono_family() -> FontFamily {
+    FontFamily::Name("preview_mono".into())
+}
+
 /// 加载系统中文字体，避免界面与正文出现方框。
 pub fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
@@ -105,6 +110,15 @@ pub fn install_fonts(ctx: &egui::Context) {
             .entry(FontFamily::Monospace)
             .or_default()
             .insert(0, "mono".to_owned());
+        // 必须在 apply_tweak("mono") 之前克隆，预览行内代码不要源码用的 y_offset。
+        if let Some(arc) = fonts.font_data.get("mono").cloned() {
+            fonts.font_data.insert("preview_mono".to_owned(), arc);
+            let mut stack = vec!["preview_mono".to_owned()];
+            if fonts.font_data.contains_key("cjk") {
+                stack.push("cjk".to_owned());
+            }
+            fonts.families.insert(preview_mono_family(), stack);
+        }
     }
     let mono_bold = [
         r"C:\Windows\Fonts\consolab.ttf",
