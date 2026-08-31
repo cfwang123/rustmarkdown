@@ -78,6 +78,8 @@ pub fn content_scroll(vertical_only: bool) -> egui::ScrollArea {
         egui::ScrollArea::both()
     };
     sa.auto_shrink([false, false])
+        // Ctrl+A / 跳转 / 后退前进：立刻到位，不要滑过去。
+        .animated(false)
         .scroll_source(egui::containers::scroll_area::ScrollSource {
             scroll_bar: true,
             drag: false,
@@ -136,10 +138,13 @@ pub fn consume_key_nav(ui: &mut egui::Ui) -> KeyNav {
 pub fn apply_key_nav_scroll(ui: &mut egui::Ui, nav: KeyNav, page_h: Option<f32>) {
     match nav {
         KeyNav::None => {}
-        KeyNav::Line(d) => ui.scroll_with_delta(d),
+        KeyNav::Line(d) => ui.scroll_with_delta_animation(d, egui::style::ScrollAnimation::none()),
         KeyNav::Page(dir) => {
             let h = page_h.unwrap_or_else(|| (ui.clip_rect().height() * 0.9).max(120.0));
-            ui.scroll_with_delta(egui::vec2(0.0, -(dir as f32) * h));
+            ui.scroll_with_delta_animation(
+                egui::vec2(0.0, -(dir as f32) * h),
+                egui::style::ScrollAnimation::none(),
+            );
         }
     }
 }

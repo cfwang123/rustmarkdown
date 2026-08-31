@@ -28,7 +28,7 @@ Implemented:
 - Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file
 - Preview task lists (`- [ ]` / `- [x]`) read-only
 - Preview tables as a continuous grid (header fill, shared borders), not per-cell rounded boxes
-- Preview/editor scrollbars flush to the window edge, fixed expanded width; faster wheel; wheel still works while selecting text
+- Preview/editor scrollbars flush to the window edge, fixed expanded width; faster wheel; wheel still works while selecting text; Ctrl+A, back/forward, and heading jumps snap with no scroll animation
 - Source wraps by pane width (break-word; no horizontal scroll on long lines); preview wraps from the start of the line and splits a word only after filling the line; CJK/Latin in preview is split by script and bottom-aligned (Latin Ubuntu baseline shifted down, CJK YaHei); inline `` `code` `` gray chips are vertically centered in the line; source Consolas baseline shifted to match YaHei; blank source lines keep their height in the editor and in preview
 - Source editor background solid white `#ffffff`
 - Preview bold / bold-italic / heading weight (YaHei Bold); inline `<font>` color and weight
