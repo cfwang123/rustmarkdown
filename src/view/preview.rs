@@ -237,6 +237,7 @@ pub fn show(
 ) {
     let mut ui = crate::view::pane_ui(ui);
     ui.painter().rect_filled(ui.max_rect(), 0.0, Color32::WHITE);
+    arm_preview_copy_fix(&ui);
     if ui.input(|i| i.pointer.primary_pressed()) {
         st.pick_lines = None;
         st.pick_anchor = None;
@@ -330,6 +331,7 @@ pub fn show_paged(
     let pane_clip = ui.clip_rect();
     ui.set_clip_rect(pane_clip);
     ui.painter().rect_filled(ui.max_rect(), 0.0, WORD_BG);
+    arm_preview_copy_fix(&ui);
     if ui.input(|i| i.pointer.primary_pressed()) {
         st.pick_lines = None;
         st.pick_anchor = None;
@@ -510,6 +512,66 @@ fn blank_takes_space(_blocks: &[MdBlock], _i: usize) -> bool {
     true
 }
 
+/// egui 跨 Label 复制会在相邻控件之间插空格，汉字链接（`请看[文档](u)`）会变成「请看 文档」。
+fn squeeze_cjk_spaces(s: &str) -> String {
+    let chs: Vec<char> = s.chars().filter(|&c| c != '\u{200B}').collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chs.len() {
+        if chs[i] == ' ' {
+            let mut j = i;
+            while j < chs.len() && chs[j] == ' ' {
+                j += 1;
+            }
+            let prev_cjk = out.chars().last().is_some_and(is_cjk);
+            let next_cjk = j < chs.len() && is_cjk(chs[j]);
+            if !prev_cjk || !next_cjk {
+                for _ in i..j {
+                    out.push(' ');
+                }
+            }
+            i = j;
+        } else {
+            out.push(chs[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
+#[derive(Default)]
+struct PreviewCopyFix {
+    squeeze: bool,
+}
+
+impl egui::Plugin for PreviewCopyFix {
+    fn debug_name(&self) -> &'static str {
+        "preview_copy_fix"
+    }
+
+    fn on_begin_pass(&mut self, _ctx: &egui::Context) {
+        self.squeeze = false;
+    }
+
+    fn output_hook(&mut self, output: &mut egui::FullOutput) {
+        if !self.squeeze {
+            return;
+        }
+        for cmd in &mut output.platform_output.commands {
+            if let egui::OutputCommand::CopyText(s) = cmd {
+                *s = squeeze_cjk_spaces(s);
+            }
+        }
+    }
+}
+
+fn arm_preview_copy_fix(ui: &Ui) {
+    if !ui.rect_contains_pointer(ui.max_rect()) {
+        return;
+    }
+    ui.ctx().plugin_or_default::<PreviewCopyFix>().lock().squeeze = true;
+}
+
 /// 与 Label 相同：可拖选，但不抢 Tab 焦点。
 fn select_sense() -> Sense {
     let mut s = Sense::click_and_drag();
@@ -531,8 +593,9 @@ fn sel_gap_size(ui: &mut Ui, w: f32, h: f32) {
     let h = h.max(1.0);
     let w = w.max(1.0);
     let (rect, response) = ui.allocate_exact_size(vec2(w, h), select_sense());
+    // 空 galley：可起选，但复制时不会塞进空格。
     let galley = ui.painter().layout_no_wrap(
-        " ".to_owned(),
+        String::new(),
         egui::FontId::proportional(1.0),
         Color32::TRANSPARENT,
     );
@@ -2121,6 +2184,15 @@ fn push_thumb(
 mod tests {
     use super::*;
     use crate::parser;
+
+    #[test]
+    fn squeeze_cjk_spaces_around_link() {
+        assert_eq!(squeeze_cjk_spaces("请看 文档 了解"), "请看文档了解");
+        assert_eq!(squeeze_cjk_spaces("请看  安装说明  即可"), "请看安装说明即可");
+        assert_eq!(squeeze_cjk_spaces("中文 English 汉字"), "中文 English 汉字");
+        assert_eq!(squeeze_cjk_spaces("访问 https://x.com 即可"), "访问 https://x.com 即可");
+        assert_eq!(squeeze_cjk_spaces("hello world"), "hello world");
+    }
 
     #[test]
     fn heading_fold_skips_until_same_or_higher() {
