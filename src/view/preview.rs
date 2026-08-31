@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 use egui::{
@@ -47,6 +48,9 @@ pub struct PreviewState {
     pub word_zoom: f32,
     /// PgUp/PgDn 目标页（0-based）。
     pending_word_page: Option<usize>,
+    /// 顶层块指纹（不含源行号，插入上方不污染后续段）。
+    fingerprints: Vec<u64>,
+    last_page_w: f32,
 }
 
 impl PreviewState {
@@ -81,6 +85,8 @@ impl Default for PreviewState {
             word_pages: 0,
             word_zoom: 1.0,
             pending_word_page: None,
+            fingerprints: Vec::new(),
+            last_page_w: 0.0,
         }
     }
 }
@@ -128,6 +134,93 @@ fn c(r: u8, g: u8, b: u8) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+fn block_fp(b: &MdBlock) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    hash_block(b, &mut h);
+    h.finish()
+}
+
+fn hash_block(b: &MdBlock, h: &mut impl Hasher) {
+    std::mem::discriminant(&b.kind).hash(h);
+    b.level.hash(h);
+    b.ordered.hash(h);
+    b.task.hash(h);
+    b.lang.hash(h);
+    b.text.hash(h);
+    b.summary.hash(h);
+    b.details_open.hash(h);
+    for s in &b.spans {
+        std::mem::discriminant(&s.kind).hash(h);
+        s.text.hash(h);
+        s.href.hash(h);
+    }
+    b.table_rows.hash(h);
+    for a in &b.table_align {
+        std::mem::discriminant(a).hash(h);
+    }
+    b.img_w.map(|v| v.to_bits()).hash(h);
+    b.img_h.map(|v| v.to_bits()).hash(h);
+    for c in &b.children {
+        hash_block(c, h);
+    }
+}
+
+/// 对齐 mdview：指纹前后缀对齐，迁移未变块高度。
+/// 返回脏区 `[lo, hi)`（新块下标）以及折行宽是否变了（变了则视口外也不能跳过）。
+/// 可见块每帧仍会画（链接/折叠/自动序号）；只跳过视口外且未脏的块。
+fn sync_preview_incr(st: &mut PreviewState, blocks: &[MdBlock], page_w: f32) -> (usize, usize, bool) {
+    let fps: Vec<u64> = blocks.iter().map(block_fp).collect();
+    let n = blocks.len();
+    let wrap_changed = st.last_page_w > 1.0 && (st.last_page_w - page_w).abs() > 1.0;
+    let (lo, hi_old, hi_new) = if wrap_changed || st.fingerprints.is_empty() {
+        (0, st.fingerprints.len(), n)
+    } else {
+        crate::view::incr::diff_fps(&st.fingerprints, &fps)
+    };
+    let mut new_h = vec![28.0f32; n];
+    if !wrap_changed && st.block_heights.len() == st.fingerprints.len() {
+        for i in 0..lo.min(n) {
+            new_h[i] = st.block_heights[i];
+        }
+        let n_suf = n.saturating_sub(hi_new);
+        for k in 0..n_suf {
+            let oi = hi_old + k;
+            let ni = hi_new + k;
+            if oi < st.block_heights.len() && ni < n {
+                new_h[ni] = st.block_heights[oi];
+            }
+        }
+    }
+    st.block_heights = new_h;
+    st.block_tops.clear();
+    st.block_tops.resize(n, 0.0);
+    st.fingerprints = fps;
+    st.last_page_w = page_w;
+    (lo, hi_new, wrap_changed)
+}
+
+/// 跳过视口外块时仍推进列表序号 / 标题自动编号，避免后面可见块编号错。
+fn bump_skip_state(
+    b: &MdBlock,
+    ol: &mut HashMap<u32, i32>,
+    head_num: &mut HeadingNumber,
+    opts: PreviewOpts,
+) {
+    if b.kind == MdBlockKind::ListItem {
+        ol.retain(|&k, _| k <= b.level);
+        if b.ordered {
+            *ol.entry(b.level).or_insert(0) += 1;
+        }
+    }
+    if b.kind == MdBlockKind::Heading
+        && opts.heading_auto_number
+        && !b.text.trim().is_empty()
+    {
+        let lv = b.level.clamp(1, 6) as i32;
+        let _ = head_num.next(lv);
+    }
+}
+
 /// Markdown 块级预览（对齐 MdFlowBuilder 色值/间距）。
 pub fn show(
     ui: &mut Ui,
@@ -172,10 +265,8 @@ pub fn show(
                         ui.label(RichText::new("(空文档)").color(c(0x4B, 0x55, 0x63)));
                         return;
                     }
-                    st.block_tops.clear();
-                    st.block_tops.resize(doc.blocks.len(), 0.0);
-                    st.block_heights.clear();
-                    st.block_heights.resize(doc.blocks.len(), 0.0);
+                    let (dirty_lo, dirty_hi, wrap_changed) =
+                        sync_preview_incr(st, &doc.blocks, page_w);
                     let mut ol: HashMap<u32, i32> = HashMap::new();
                     let mut head_num = HeadingNumber::default();
                     render_blocks(
@@ -193,6 +284,9 @@ pub fn show(
                         0,
                         &mut ol,
                         &mut head_num,
+                        dirty_lo,
+                        dirty_hi,
+                        !wrap_changed,
                     );
                     st.top_line = 0;
                     for (i, b) in doc.blocks.iter().enumerate() {
@@ -249,10 +343,7 @@ pub fn show_paged(
     let inner_w = (page_w - margin * 2.0).max(80.0);
     let inner_h = (page_h - margin * 2.0).max(80.0);
 
-    if st.block_heights.len() != doc.blocks.len() {
-        st.block_heights.resize(doc.blocks.len(), 28.0);
-        st.block_tops.resize(doc.blocks.len(), 0.0);
-    }
+    let (dirty_lo, dirty_hi, wrap_changed) = sync_preview_incr(st, &doc.blocks, inner_w);
     let pages = pack_word_pages(&doc.blocks, &st.block_heights, inner_h, &st.collapsed_heads);
     st.word_pages = pages.len().max(1);
     let nav = crate::view::consume_key_nav(&mut ui);
@@ -325,6 +416,9 @@ pub fn show_paged(
                                             a,
                                             &mut ol,
                                             &mut head_num,
+                                            dirty_lo,
+                                            dirty_hi,
+                                            !wrap_changed,
                                         );
                                     }
                                 });
@@ -486,6 +580,9 @@ fn render_blocks(
     index_base: usize,
     ol: &mut HashMap<u32, i32>,
     head_num: &mut HeadingNumber,
+    dirty_lo: usize,
+    dirty_hi: usize,
+    skip_offscreen: bool,
 ) {
     let page = page_w.max(120.0);
     let img_max = if opts.img_max_width > 0 {
@@ -493,6 +590,10 @@ fn render_blocks(
     } else {
         page
     };
+    let clip = ui.clip_rect();
+    let pad = clip.height().max(80.0);
+    let vis_top = clip.top() - pad;
+    let vis_bot = clip.bottom() + pad;
     let mut i = 0;
     while i < blocks.len() {
         let b = &blocks[i];
@@ -504,8 +605,47 @@ fn render_blocks(
             st.block_tops[gi] = ui.cursor().top();
         }
         let y0 = ui.cursor().top();
+        let h_cached = st.block_heights.get(gi).copied().unwrap_or(28.0);
+        let dirty = gi >= dirty_lo && gi < dirty_hi;
+        let caret_here = caret_line.is_some_and(|cl| {
+            b.kind != MdBlockKind::Blank && b.line0 <= cl && cl <= b.line1
+        });
+        let hint_here = record_tops && hint_covers(st, b);
+        let offscreen = y0 + h_cached < vis_top || y0 > vis_bot;
+        let foldable = b.kind == MdBlockKind::Heading && heading_has_body(blocks, i);
+        let collapsed = foldable && st.collapsed_heads.contains(&b.line0);
+
+        if skip_offscreen
+            && record_tops
+            && !dirty
+            && !caret_here
+            && !hint_here
+            && offscreen
+            && h_cached > 1.0
+        {
+            bump_skip_state(b, ol, head_num, opts);
+            ui.add_space(h_cached);
+            if collapsed {
+                let end = skip_heading_section(blocks, i);
+                let y = ui.cursor().top();
+                for k in (i + 1)..end {
+                    let gk = index_base + k;
+                    if gk < st.block_tops.len() {
+                        st.block_tops[gk] = y;
+                    }
+                    if gk < st.block_heights.len() {
+                        st.block_heights[gk] = 0.0;
+                    }
+                }
+                i = end;
+                continue;
+            }
+            i += 1;
+            continue;
+        }
+
         let mut collapsed_end = None;
-        let hint = if record_tops && hint_covers(st, b) {
+        let hint = if hint_here {
             st.hint_text.clone()
         } else {
             String::new()
@@ -514,8 +654,6 @@ fn render_blocks(
         ui.push_id((b.line0, gi), |ui| match b.kind {
             MdBlockKind::Blank => show_blank(ui, blocks, i),
             MdBlockKind::Heading => {
-                let foldable = heading_has_body(blocks, i);
-                let collapsed = foldable && st.collapsed_heads.contains(&b.line0);
                 show_heading(
                     ui,
                     b,
@@ -608,6 +746,9 @@ fn render_blocks(
                             0,
                             &mut nested_ol,
                             &mut nested_hn,
+                            0,
+                            usize::MAX,
+                            false,
                         );
                     });
                 ui.add_space(BASE_FS * 0.9);

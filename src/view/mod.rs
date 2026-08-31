@@ -4,6 +4,7 @@ pub mod highlight;
 pub mod icons;
 pub mod img_preview;
 pub mod img_view;
+pub mod incr;
 pub mod md_hl;
 pub mod outline;
 pub mod pdf;

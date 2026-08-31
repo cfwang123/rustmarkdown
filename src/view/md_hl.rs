@@ -63,8 +63,16 @@ struct FenceCache {
     spans: Vec<(usize, usize)>,
 }
 
+struct ParaMem {
+    wrap: u32,
+    font_sz: u32,
+    keys: Vec<u64>,
+    galleys: Vec<Arc<egui::Galley>>,
+}
+
 static CACHE: LazyLock<Mutex<Option<Cache>>> = LazyLock::new(|| Mutex::new(None));
 static GALLEY: LazyLock<Mutex<Vec<GalleyEntry>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+static PARA: LazyLock<Mutex<Option<ParaMem>>> = LazyLock::new(|| Mutex::new(None));
 static FENCE_CACHE: LazyLock<Mutex<Option<FenceCache>>> = LazyLock::new(|| Mutex::new(None));
 
 fn heading_fg(lv: usize) -> Color32 {
@@ -187,7 +195,7 @@ pub fn layout_galley(
         let mut job = layout_job(ui, text);
         job.wrap.max_width = wrap as f32;
         job.wrap.break_anywhere = true;
-        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        let galley = layout_by_paragraphs(ui, job, wrap, font_sz);
         galley_store(GalleyEntry {
             hash,
             font_sz,
@@ -197,6 +205,163 @@ pub fn layout_galley(
         galley
     };
     hollow_offscreen_sel(ui, galley)
+}
+
+fn hash_para_span(
+    text: &str,
+    sections: &[egui::text::LayoutSection],
+    start: usize,
+    end: usize,
+    wrap: u32,
+    font_sz: u32,
+) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut h);
+    wrap.hash(&mut h);
+    font_sz.hash(&mut h);
+    for s in sections {
+        if s.byte_range.end <= start {
+            continue;
+        }
+        if s.byte_range.start >= end {
+            break;
+        }
+        let ns = s.byte_range.start.saturating_sub(start);
+        let ne = s.byte_range.end.min(end).saturating_sub(start);
+        if ns >= ne {
+            continue;
+        }
+        ns.hash(&mut h);
+        ne.hash(&mut h);
+        s.format.color.hash(&mut h);
+        s.format.background.hash(&mut h);
+        s.format.italics.hash(&mut h);
+        s.format.font_id.size.to_bits().hash(&mut h);
+        if start <= s.byte_range.start {
+            s.leading_space.to_bits().hash(&mut h);
+        }
+    }
+    h.finish()
+}
+
+fn paragraph_keys(
+    job: &egui::text::LayoutJob,
+    wrap: u32,
+    font_sz: u32,
+) -> (Vec<(usize, usize)>, Vec<u64>) {
+    let ranges = crate::view::incr::paragraph_ranges(&job.text);
+    let mut keys = Vec::with_capacity(ranges.len());
+    let mut si = 0usize;
+    for &(start, end) in &ranges {
+        while si < job.sections.len() && job.sections[si].byte_range.end <= start {
+            si += 1;
+        }
+        keys.push(hash_para_span(
+            &job.text[start..end],
+            &job.sections[si..],
+            start,
+            end,
+            wrap,
+            font_sz,
+        ));
+    }
+    (ranges, keys)
+}
+
+fn paragraph_job(
+    job: &egui::text::LayoutJob,
+    start: usize,
+    end: usize,
+) -> egui::text::LayoutJob {
+    let mut para = egui::text::LayoutJob {
+        text: job.text[start..end].to_owned(),
+        wrap: job.wrap.clone(),
+        sections: Vec::new(),
+        break_on_newline: job.break_on_newline,
+        halign: job.halign,
+        justify: job.justify,
+        first_row_min_height: if start == 0 {
+            job.first_row_min_height
+        } else {
+            0.0
+        },
+        round_output_to_gui: job.round_output_to_gui,
+    };
+    for sec in &job.sections {
+        if sec.byte_range.end <= start {
+            continue;
+        }
+        if sec.byte_range.start >= end {
+            break;
+        }
+        let ns = sec.byte_range.start.saturating_sub(start);
+        let ne = sec.byte_range.end.min(end).saturating_sub(start);
+        if ns < ne {
+            para.sections.push(egui::text::LayoutSection {
+                leading_space: if start <= sec.byte_range.start {
+                    sec.leading_space
+                } else {
+                    0.0
+                },
+                byte_range: ns..ne,
+                format: sec.format.clone(),
+            });
+        }
+    }
+    para
+}
+
+fn layout_by_paragraphs(
+    ui: &egui::Ui,
+    job: egui::text::LayoutJob,
+    wrap: u32,
+    font_sz: u32,
+) -> Arc<egui::Galley> {
+    if !job.break_on_newline || !job.text.contains('\n') {
+        return ui.fonts_mut(|f| f.layout_job(job));
+    }
+    let (ranges, keys) = paragraph_keys(&job, wrap, font_sz);
+    if ranges.len() <= 1 {
+        return ui.fonts_mut(|f| f.layout_job(job));
+    }
+    let mut mem = PARA.lock().unwrap_or_else(|e| e.into_inner());
+    let (lo, hi_old, hi_new) = match mem.as_ref() {
+        Some(m) if m.wrap == wrap && m.font_sz == font_sz => {
+            crate::view::incr::diff_fps(&m.keys, &keys)
+        }
+        _ => (0, 0, keys.len()),
+    };
+    let mut galleys: Vec<Option<Arc<egui::Galley>>> = vec![None; ranges.len()];
+    if let Some(m) = mem.as_ref() {
+        if m.wrap == wrap && m.font_sz == font_sz {
+            for i in 0..lo {
+                if let Some(g) = m.galleys.get(i) {
+                    galleys[i] = Some(g.clone());
+                }
+            }
+            let n_suf = keys.len() - hi_new;
+            for k in 0..n_suf {
+                if let Some(g) = m.galleys.get(hi_old + k) {
+                    galleys[hi_new + k] = Some(g.clone());
+                }
+            }
+        }
+    }
+    for (i, &(start, end)) in ranges.iter().enumerate() {
+        if galleys[i].is_none() {
+            let para = paragraph_job(&job, start, end);
+            galleys[i] = Some(ui.fonts_mut(|f| f.layout_job(para)));
+        }
+    }
+    let galleys: Vec<Arc<egui::Galley>> = galleys.into_iter().map(|g| g.unwrap()).collect();
+    *mem = Some(ParaMem {
+        wrap,
+        font_sz,
+        keys,
+        galleys: galleys.clone(),
+    });
+    let ppp = ui.ctx().pixels_per_point();
+    Arc::new(egui::Galley::concat(Arc::new(job), &galleys, ppp))
 }
 
 fn hash_text(text: &str) -> u64 {
