@@ -412,8 +412,12 @@ fn hash_text(text: &str) -> u64 {
     h.finish()
 }
 
-/// 与 `TextEdit::id_salt` 一致，供取出拖选范围。
+/// 与 `TextEdit::id_salt` 一致。`.id_salt(s)` 实际是 `make_persistent_id(Id::new(s))`。
 pub const EDITOR_ID_SALT: &str = "editor";
+
+pub fn editor_widget_id(ui: &egui::Ui) -> egui::Id {
+    ui.make_persistent_id(egui::Id::new(EDITOR_ID_SALT))
+}
 
 fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
     static DUMMY: LazyLock<Mutex<Option<Arc<egui::epaint::text::Row>>>> =
@@ -433,70 +437,92 @@ fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
     Some(row)
 }
 
+fn row_in_clip(origin_y: f32, clip: Rect, row: &egui::Galley, ri: usize, pad: f32) -> bool {
+    let Some(r) = row.rows.get(ri) else {
+        return false;
+    };
+    let y0 = origin_y + r.pos.y;
+    let y1 = y0 + r.size.y.max(1.0);
+    y1 >= clip.top() - pad && y0 <= clip.bottom() + pad
+}
+
 /// egui 拖选会 `Arc::make_mut` 每一行网格并把字形改成选区色。
-/// 按段缓存的行是共享的，若不先拆开，上一行/未选中的相同段会一起变色。
-/// 选区中间行掏空网格（保留行高）；只给光标附近和选区首尾行保留实网格。
+/// 排版在 TextEdit 更新光标之前，且 `.id_salt` 必须用 `Id::new` 才能读到上次选区。
+/// 拖选 / Ctrl+A / 已有长选区：视口外行掏空网格，避免首帧复制整篇。
 fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
     let t0 = std::time::Instant::now();
-    let id = ui.make_persistent_id(EDITOR_ID_SALT);
-    let Some(state) = egui::TextEdit::load_state(ui.ctx(), id) else {
-        return galley;
-    };
-    let Some(range) = state.cursor.char_range() else {
-        return galley;
-    };
-    if range.is_empty() {
+    let last = galley.rows.len().saturating_sub(1);
+    if last == 0 {
         return galley;
     }
-    let [min, max] = range.sorted_cursors();
-    let min_row = galley.layout_from_cursor(min).row;
-    let max_row = galley.layout_from_cursor(max).row;
-    let lo = min_row.min(max_row);
-    let hi = min_row.max(max_row);
-    let keep = galley.layout_from_cursor(range.primary).row;
+    let id = editor_widget_id(ui);
+    let state = egui::TextEdit::load_state(ui.ctx(), id);
+    let range = state.as_ref().and_then(|s| s.cursor.char_range());
+    let (sel_all, dragging, shift_click) = ui.input(|i| {
+        let cmd = i.modifiers.command || i.modifiers.ctrl;
+        (
+            cmd && i.key_pressed(egui::Key::A),
+            i.pointer.primary_down(),
+            i.modifiers.shift && i.pointer.primary_pressed(),
+        )
+    });
+    let expanding = sel_all || dragging || shift_click;
+    let mut keep = 0usize;
+    let mut lo = 0usize;
+    let mut hi = 0usize;
+    let mut has_sel = false;
+    if let Some(range) = range.filter(|r| !r.is_empty()) {
+        let [min, max] = range.sorted_cursors();
+        lo = galley.layout_from_cursor(min).row;
+        hi = galley.layout_from_cursor(max).row;
+        if lo > hi {
+            std::mem::swap(&mut lo, &mut hi);
+        }
+        keep = galley.layout_from_cursor(range.primary).row;
+        has_sel = true;
+    } else if let Some(range) = range {
+        keep = galley.layout_from_cursor(range.primary).row;
+    }
+    if expanding {
+        lo = 0;
+        hi = last;
+    } else if !has_sel {
+        return galley;
+    }
+    hi = hi.min(last);
+    let span = hi.saturating_sub(lo);
+    if span <= 2 && !expanding {
+        return galley;
+    }
+    let Some(dummy) = dummy_row(ui) else {
+        return galley;
+    };
+    let origin_y = ui.cursor().top();
+    let clip = ui.clip_rect();
     let keep_lo = keep.saturating_sub(SEL_KEEP_ROWS);
     let keep_hi = keep.saturating_add(SEL_KEEP_ROWS);
-    let last = galley.rows.len().saturating_sub(1);
-    let hi = hi.min(last);
-    let span = hi.saturating_sub(lo);
-    if span <= 2 {
-        let mut g = (*galley).clone();
-        for ri in lo..=hi {
-            Arc::make_mut(&mut g.rows[ri].row);
-        }
-        crate::io::log::slow(
-            &format!("hollow short sel_rows={span} galley_rows={}", g.rows.len()),
-            t0,
-            crate::io::log::SPAN_MS,
-        );
-        return Arc::new(g);
-    }
-    let dummy = dummy_row(ui);
     let mut g = (*galley).clone();
     let mut n_hollow = 0usize;
     let mut n_keep = 0usize;
     for ri in lo..=hi {
-        let at_end = ri == lo || ri == hi;
         let near = ri >= keep_lo && ri <= keep_hi;
-        if !at_end && !near {
-            if let Some(dummy) = dummy.as_ref() {
-                let src = &g.rows[ri].row;
-                let mut row = (**dummy).clone();
-                row.size = src.size;
-                row.ends_with_newline = src.ends_with_newline;
-                row.glyphs.clear();
-                row.visuals = RowVisuals::default();
-                g.rows[ri].row = Arc::new(row);
-                n_hollow += 1;
-                continue;
-            }
+        let vis = row_in_clip(origin_y, clip, &g, ri, 80.0);
+        if near || vis {
+            n_keep += 1;
+            continue;
         }
-        Arc::make_mut(&mut g.rows[ri].row);
-        n_keep += 1;
+        let src = &g.rows[ri].row;
+        let mut row = (*dummy).clone();
+        row.size = src.size;
+        row.ends_with_newline = src.ends_with_newline;
+        row.glyphs.clear();
+        row.visuals = RowVisuals::default();
+        g.rows[ri].row = Arc::new(row);
+        n_hollow += 1;
     }
     crate::io::log::slow(
         &format!(
-            "hollow sel_rows={span} keep={n_keep} hollow={n_hollow} galley_rows={}",
+            "hollow span={span} keep={n_keep} hollow={n_hollow} galley_rows={} drag={dragging} sel_all={sel_all}",
             g.rows.len()
         ),
         t0,

@@ -89,7 +89,7 @@ pub fn show(
             };
             let undo_pin = apply_text_undo(undoer, text, want_undo, want_redo);
             if let Some(idx) = undo_pin {
-                let id = ui.make_persistent_id(crate::view::md_hl::EDITOR_ID_SALT);
+                let id = crate::view::md_hl::editor_widget_id(ui);
                 if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), id) {
                     st.cursor
                         .set_char_range(Some(CCursorRange::one(CCursor::new(idx))));
