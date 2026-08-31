@@ -499,13 +499,8 @@ fn pack_word_pages(
     pages
 }
 
-fn blank_takes_space(blocks: &[MdBlock], i: usize) -> bool {
-    let prev = i.checked_sub(1).map(|j| blocks[j].kind);
-    let next = blocks.get(i + 1).map(|b| b.kind);
-    let consecutive = prev == Some(MdBlockKind::Blank);
-    let by_list =
-        prev == Some(MdBlockKind::ListItem) || next == Some(MdBlockKind::ListItem);
-    consecutive || by_list
+fn blank_takes_space(_blocks: &[MdBlock], _i: usize) -> bool {
+    true
 }
 
 fn show_blank(ui: &mut Ui, blocks: &[MdBlock], i: usize) {
@@ -2119,7 +2114,7 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         assert_eq!(pb.len(), 1);
-        assert!(!blank_takes_space(&para.blocks, pb[0]));
+        assert!(blank_takes_space(&para.blocks, pb[0]));
         let extra = parser::parse("p1\n\n\np2");
         let eb: Vec<usize> = extra
             .blocks
@@ -2129,7 +2124,7 @@ mod tests {
             .map(|(i, _)| i)
             .collect();
         assert_eq!(eb.len(), 2);
-        assert!(!blank_takes_space(&extra.blocks, eb[0]));
+        assert!(blank_takes_space(&extra.blocks, eb[0]));
         assert!(blank_takes_space(&extra.blocks, eb[1]));
     }
 

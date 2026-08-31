@@ -223,6 +223,9 @@ fn hash_para_span(
     text.hash(&mut h);
     wrap.hash(&mut h);
     font_sz.hash(&mut h);
+    if start == end {
+        1u8.hash(&mut h);
+    }
     for s in sections {
         if s.byte_range.end <= start {
             continue;
@@ -312,7 +315,29 @@ fn paragraph_job(
             });
         }
     }
+    if para.text.is_empty() {
+        let format = empty_line_format(job, start);
+        let h = format.line_height.unwrap_or(format.font_id.size * 1.45);
+        para.first_row_min_height = para.first_row_min_height.max(h);
+        if para.sections.is_empty() {
+            para.sections.push(egui::text::LayoutSection {
+                leading_space: 0.0,
+                byte_range: 0..0,
+                format,
+            });
+        }
+    }
     para
+}
+
+fn empty_line_format(job: &egui::text::LayoutJob, at: usize) -> TextFormat {
+    job.sections
+        .iter()
+        .rev()
+        .find(|s| s.byte_range.start <= at)
+        .or(job.sections.first())
+        .map(|s| s.format.clone())
+        .unwrap_or_default()
 }
 
 fn layout_by_paragraphs(

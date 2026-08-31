@@ -18,6 +18,7 @@ pub fn diff_fps(old: &[u64], new: &[u64]) -> (usize, usize, usize) {
 }
 
 /// 源码行区间，不含换行（文件以换行结尾时最后一段含该换行，对齐 epaint 分段）。
+/// 空行是 `(i, i)`，由排版给一行高度，不能把 `\n` 算进段里（否则每行变成两行高）。
 pub fn paragraph_ranges(text: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     if text.is_empty() {
@@ -89,5 +90,23 @@ mod tests {
         let s = "a\n";
         assert_eq!(paragraph_ranges(s), vec![(0, 2)]);
         assert_eq!(&s[0..2], "a\n");
+    }
+
+    #[test]
+    fn paragraph_ranges_keeps_blank_line() {
+        let s = "a\n\nb";
+        assert_eq!(paragraph_ranges(s), vec![(0, 1), (2, 2), (3, 4)]);
+        assert_eq!(&s[0..1], "a");
+        assert_eq!(&s[2..2], "");
+        assert_eq!(&s[3..4], "b");
+    }
+
+    #[test]
+    fn paragraph_ranges_triple_blank() {
+        let s = "x\n\n\n\ny";
+        assert_eq!(
+            paragraph_ranges(s),
+            vec![(0, 1), (2, 2), (3, 3), (4, 4), (5, 6)]
+        );
     }
 }
