@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod file;
 pub mod imgcache;
+pub mod log;
 pub mod mermaid;
 pub mod pdf;
 pub mod pdfium;

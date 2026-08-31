@@ -121,7 +121,16 @@ pub fn layout_job(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
             bold: FontId::new(font.size, theme::mono_bold_family()),
             heading: FontId::new(font.size, theme::mono_bold_family()),
         };
-        incr_highlight(text, &faces, font_sz, hash, &mut g)
+        let t0 = std::time::Instant::now();
+        let n = text.len();
+        let job = incr_highlight(text, &faces, font_sz, hash, &mut g);
+        if crate::io::log::enabled() {
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            if ms >= crate::io::log::SPAN_MS {
+                crate::io::log::write(&format!("highlight chars={n} {ms:.0}ms"));
+            }
+        }
+        job
     }
 }
 
@@ -326,6 +335,8 @@ fn layout_by_paragraphs(
     if ranges.len() <= 1 {
         return ui.fonts_mut(|f| f.layout_job(job));
     }
+    let t0 = std::time::Instant::now();
+    let n_para = ranges.len();
     let mut mem = PARA.lock().unwrap_or_else(|e| e.into_inner());
     let (lo, hi_old, hi_new) = match mem.as_ref() {
         Some(m) if m.font_sz == font_sz && wrap_close(m.wrap, wrap, false) => {
@@ -349,10 +360,12 @@ fn layout_by_paragraphs(
             }
         }
     }
+    let mut n_layout = 0usize;
     for (i, &(start, end)) in ranges.iter().enumerate() {
         if galleys[i].is_none() {
             let para = paragraph_job(&job, start, end);
             galleys[i] = Some(ui.fonts_mut(|f| f.layout_job(para)));
+            n_layout += 1;
         }
     }
     let galleys: Vec<Arc<egui::Galley>> = galleys.into_iter().map(|g| g.unwrap()).collect();
@@ -363,7 +376,16 @@ fn layout_by_paragraphs(
         galleys: galleys.clone(),
     });
     let ppp = ui.ctx().pixels_per_point();
-    Arc::new(egui::Galley::concat(Arc::new(job), &galleys, ppp))
+    let galley = Arc::new(egui::Galley::concat(Arc::new(job), &galleys, ppp));
+    if crate::io::log::enabled() {
+        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+        if ms >= crate::io::log::SPAN_MS {
+            crate::io::log::write(&format!(
+                "layout paras dirty={n_layout}/{n_para} {ms:.0}ms"
+            ));
+        }
+    }
+    galley
 }
 
 fn hash_text(text: &str) -> u64 {

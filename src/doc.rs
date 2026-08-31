@@ -159,6 +159,8 @@ pub struct Tab {
     pub pending_editor_line: Option<usize>,
     pub pending_preview_line: Option<usize>,
     pub find: crate::view::find::FindState,
+    /// 只记录正文增删，不含光标移动。
+    pub text_undo: egui::util::undoer::Undoer<String>,
     last_editor_off: f32,
     last_preview_off: f32,
     sync_armed: bool,
@@ -172,6 +174,7 @@ impl Tab {
             other => other,
         };
         let md = crate::parser::parse_with_tab(&doc.text, tab_size);
+        let text_undo = new_text_undo(&doc.text);
         Self {
             id,
             kind: DocKind::Markdown,
@@ -201,6 +204,7 @@ impl Tab {
             pending_editor_line: None,
             pending_preview_line: None,
             find: crate::view::find::FindState::default(),
+            text_undo,
             last_editor_off: 0.0,
             last_preview_off: 0.0,
             sync_armed: false,
@@ -210,6 +214,10 @@ impl Tab {
 
     pub fn is_readonly(&self) -> bool {
         self.kind != DocKind::Markdown
+    }
+
+    pub fn reset_text_undo(&mut self) {
+        self.text_undo = new_text_undo(&self.doc.text);
     }
 
     pub fn mark_edited(&mut self) {
@@ -385,6 +393,12 @@ impl Tab {
 
 pub fn norm_path(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+fn new_text_undo(text: &str) -> egui::util::undoer::Undoer<String> {
+    let mut u = egui::util::undoer::Undoer::default();
+    u.add_undo(&text.to_owned());
+    u
 }
 
 #[cfg(test)]

@@ -27,6 +27,9 @@ pub struct Settings {
     /// 最近打开的文件（最多 20，新的在前）。
     #[serde(rename = "recentFiles", default)]
     pub recent_files: Vec<PathBuf>,
+    /// 诊断日志总开关（含 UI 卡顿）。默认关。
+    #[serde(rename = "enableLogs", default)]
+    pub enable_logs: bool,
 }
 
 impl Default for Settings {
@@ -38,6 +41,7 @@ impl Default for Settings {
             side_panel_visible: true,
             side_panel_width: 240,
             recent_files: Vec::new(),
+            enable_logs: false,
         }
     }
 }

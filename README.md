@@ -23,7 +23,7 @@ Implemented:
 - ` ```mermaid ` fences: flowcharts / sequence diagrams in pure Rust (no browser; unsupported syntax falls back to source + error)
 - App icon (title bar / taskbar / exe)
 - Release / double-click exe: no console window
-- Settings (Ctrl+,): Markdown tab width, heading auto-number, max image width; stored in `%LocalAppData%\rustmarkdown\settings.json`
+- Settings (Ctrl+,): Markdown tab width, heading auto-number, max image width, master log switch; stored in `%LocalAppData%\rustmarkdown\settings.json`
 - Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root; reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
 - Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file
 - Preview task lists (`- [ ]` / `- [x]`) read-only
@@ -44,7 +44,7 @@ Implemented:
 - Side-by-side: blue bar on the block under the caret; status bar shows “N selected” when the editor has a selection
 - Status bar: mode / line count / encoding / tab width (no full path); open / switch / save toasts use the file name only
 - Cross-pane selection: selecting on the left highlights the matching preview text; dragging on the right highlights matching source
-- After Ctrl+Z / Ctrl+Y the caret stays at the change; the viewport does not jump to an older edit; moving to another line (including Enter) starts a new undo group; undoing back to the last saved/opened text marks the tab clean
+- After Ctrl+Z / Ctrl+Y the caret stays at the change; the viewport does not jump to an older edit; only insert/delete enter the undo history (caret moves do not); moving to another line (including Enter) starts a new undo group; undoing back to the last saved/opened text marks the tab clean
 - Preview table right / center align: text is aligned, glyph order matches source (no RTL, so “斜体” does not become “体斜”)
 - Title bar shows the version (e.g. `demo.md — rustmarkdown v1.0.1`)
 - Back / forward (toolbar, View menu, Alt+← / Alt+→): outline clicks, `#anchors`, and in-doc relative Markdown links (cap 50)

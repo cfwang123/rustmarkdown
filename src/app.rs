@@ -259,6 +259,7 @@ impl App {
             incoming: Some(incoming),
         };
         crate::io::single::attach_ui(&cc.egui_ctx);
+        crate::io::log::set_enabled(app.settings.enable_logs);
         app.wins[0].sidebar_open = app.settings.side_panel_visible;
         app.wins[0].sidebar_width = app.settings.side_panel_width as f32;
         let sess = Session::load();
@@ -1186,6 +1187,7 @@ impl App {
         draft.normalize();
         self.settings = draft;
         self.settings.save();
+        crate::io::log::set_enabled(self.settings.enable_logs);
         let ts = self.settings.md_tab_size;
         for win in &mut self.wins {
             for tab in &mut win.tabs {
@@ -2028,6 +2030,7 @@ impl App {
                         hint,
                         &find_all,
                         find_cur,
+                        &mut tab.text_undo,
                     );
                     Self::apply_editor_out(tab, ed)
                 }
@@ -2091,6 +2094,7 @@ impl App {
                     hint,
                     &find_all,
                     find_cur,
+                    &mut tab.text_undo,
                 );
                 ed_off = ed.offset_y;
                 ed_hovered = ed.hovered;
@@ -2725,6 +2729,14 @@ impl App {
                             }
                         });
                 });
+                ui.add_space(12.0);
+                ui.checkbox(&mut draft.enable_logs, "启用日志");
+                ui.label(
+                    RichText::new(
+                        "总开关：写入 UI 卡顿等到 %LocalAppData%\\rustmarkdown\\ui.log。默认关闭。",
+                    )
+                    .weak(),
+                );
                 ui.add_space(16.0);
                 ui.label(RichText::new("说明").strong().size(15.0));
                 ui.label(RichText::new(notes).weak());
@@ -3037,6 +3049,7 @@ impl App {
                     tab.doc.newline = nl;
                     tab.doc.enc = enc;
                     tab.doc.mark_clean();
+                    tab.reset_text_undo();
                     tab.reparse(ts);
                     self.status = format!("已从磁盘重载 {}", file_label(&path));
                 }
@@ -3056,6 +3069,7 @@ impl App {
                     let tab = &mut self.wins[wi].tabs[ti];
                     tab.doc.text = text;
                     tab.asset_dir = Some(asset);
+                    tab.reset_text_undo();
                     tab.reparse(ts);
                     self.status = format!("已从磁盘重载 {}", file_label(&path));
                 }
@@ -3187,6 +3201,7 @@ fn show_welcome(ui: &mut egui::Ui) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        let t0 = std::time::Instant::now();
         self.saw_ptr_down = false;
         self.handle_close_request(ctx);
         self.poll_incoming(ctx);
@@ -3257,6 +3272,14 @@ impl eframe::App for App {
         self.cur = 0;
         self.persist_session();
         self.flush_session(Some(ctx), false);
+        if crate::io::log::enabled() {
+            let n = self
+                .win()
+                .active_tab()
+                .map(|t| t.doc.text.len())
+                .unwrap_or(0);
+            crate::io::log::ui_lag(t0, &format!("chars={n}"));
+        }
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {

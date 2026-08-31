@@ -28,6 +28,7 @@ pub fn show(
     hint: Option<(usize, usize)>,
     find_all: &[(usize, usize)],
     find_cur: Option<(usize, usize)>,
+    undoer: &mut egui::util::undoer::Undoer<String>,
 ) -> EditorOut {
     let mut out = EditorOut {
         changed: false,
@@ -48,12 +49,23 @@ pub fn show(
     let mut ui = crate::view::pane_ui(ui);
     ui.painter()
         .rect_filled(ui.max_rect(), 0.0, egui::Color32::WHITE);
+    let t0 = std::time::Instant::now();
     let max_h = ui.available_height();
     let pane_w = ui.available_width();
-    let undo_redo = ui.input(|i| {
-        i.modifiers.command && (i.key_pressed(egui::Key::Z) || i.key_pressed(egui::Key::Y))
+    let (want_undo, want_redo) = ui.input(|i| {
+        let cmd = i.modifiers.matches_logically(egui::Modifiers::COMMAND);
+        let undo = cmd && !i.modifiers.shift && i.key_pressed(egui::Key::Z);
+        let redo = cmd
+            && (i.key_pressed(egui::Key::Y)
+                || (i.modifiers.shift && i.key_pressed(egui::Key::Z)));
+        (undo, redo)
     });
-    let before = undo_redo.then(|| text.clone());
+    let undo_redo = want_undo || want_redo;
+    if undo_redo {
+        ui.ctx().input_mut(|i| {
+            i.events.retain(|e| !is_undo_redo_key(e));
+        });
+    }
     let sa = crate::view::content_scroll(true)
         .id_salt("editor_scroll")
         .max_height(max_h)
@@ -75,6 +87,15 @@ pub fn show(
             let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
                 crate::view::md_hl::layout_galley(ui, buf.as_str(), wrap_width.max(1.0), sticky)
             };
+            let undo_pin = apply_text_undo(undoer, text, want_undo, want_redo);
+            if let Some(idx) = undo_pin {
+                let id = ui.make_persistent_id(crate::view::md_hl::EDITOR_ID_SALT);
+                if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), id) {
+                    st.cursor
+                        .set_char_range(Some(CCursorRange::one(CCursor::new(idx))));
+                    st.store(ui.ctx(), id);
+                }
+            }
             let mut te = egui::TextEdit::multiline(text)
                 .id_salt(crate::view::md_hl::EDITOR_ID_SALT)
                 .code_editor()
@@ -103,26 +124,20 @@ pub fn show(
                     ),
                 ),
             );
-            out.changed = te.response.changed();
+            out.changed = te.response.changed() || undo_pin.is_some();
             let mut pinned = None;
-            if let Some(old) = before.as_deref() {
-                if out.changed && old != text.as_str() {
-                    out.ignore_scroll_sync = true;
-                    let idx = first_diff_char(old, text);
-                    let cur = te.cursor_range.map(|r| r.primary.index);
-                    if cur != Some(idx) {
-                        pinned = Some(idx);
-                        te.state
-                            .cursor
-                            .set_char_range(Some(CCursorRange::one(CCursor::new(idx))));
-                        te.state.clone().store(ui.ctx(), te.response.id);
-                        let rect = te
-                            .galley
-                            .pos_from_cursor(CCursor::new(idx))
-                            .translate(te.galley_pos.to_vec2());
-                        ui.scroll_to_rect(rect, None);
-                    }
-                }
+            if let Some(idx) = undo_pin {
+                out.ignore_scroll_sync = true;
+                pinned = Some(idx);
+                te.state
+                    .cursor
+                    .set_char_range(Some(CCursorRange::one(CCursor::new(idx))));
+                te.state.clone().store(ui.ctx(), te.response.id);
+                let rect = te
+                    .galley
+                    .pos_from_cursor(CCursor::new(idx))
+                    .translate(te.galley_pos.to_vec2());
+                ui.scroll_to_rect(rect, None);
             }
             let clip_top = ui.clip_rect().top();
             let rel = (clip_top - te.galley_pos.y).max(0.0);
@@ -138,9 +153,9 @@ pub fn show(
                 out.cursor_line = out.top_line;
             }
             if pinned.is_none() {
-                split_undo_on_line_move(
+                split_text_undo(
                     ui,
-                    &mut te,
+                    undoer,
                     text,
                     out.changed,
                     undo_redo,
@@ -174,6 +189,9 @@ pub fn show(
     out.offset_y = sa.state.offset.y;
     let pane = ui.max_rect();
     out.hovered = ui.rect_contains_pointer(pane);
+    if out.changed {
+        crate::io::log::slow("editor.show", t0, crate::io::log::SPAN_MS);
+    }
     out
 }
 
@@ -356,19 +374,52 @@ fn undo_split_tick(
     commit
 }
 
-fn split_undo_on_line_move(
+fn is_undo_redo_key(e: &egui::Event) -> bool {
+    match e {
+        egui::Event::Key {
+            key,
+            pressed: true,
+            modifiers,
+            ..
+        } => {
+            let cmd = modifiers.matches_logically(egui::Modifiers::COMMAND);
+            cmd && (*key == egui::Key::Z || *key == egui::Key::Y)
+        }
+        _ => false,
+    }
+}
+
+fn apply_text_undo(
+    undoer: &mut egui::util::undoer::Undoer<String>,
+    text: &mut String,
+    want_undo: bool,
+    want_redo: bool,
+) -> Option<usize> {
+    if want_undo {
+        let prev = undoer.undo(text)?.clone();
+        let idx = first_diff_char(text, &prev);
+        *text = prev;
+        return Some(idx);
+    }
+    if want_redo {
+        let next = undoer.redo(text)?.clone();
+        let idx = first_diff_char(text, &next);
+        *text = next;
+        return Some(idx);
+    }
+    None
+}
+
+fn split_text_undo(
     ui: &egui::Ui,
-    te: &mut egui::text_edit::TextEditOutput,
-    text: &str,
+    undoer: &mut egui::util::undoer::Undoer<String>,
+    text: &String,
     text_changed: bool,
     undo_redo: bool,
     cursor_line: usize,
 ) {
-    let Some(range) = te.cursor_range else {
-        return;
-    };
     let now = ui.input(|i| i.time);
-    let id = te.response.id.with("undo_split");
+    let id = ui.id().with("undo_split");
     let mut st = ui
         .ctx()
         .data(|d| d.get_temp::<UndoSplit>(id))
@@ -379,12 +430,10 @@ fn split_undo_on_line_move(
         });
     let commit = undo_split_tick(&mut st, cursor_line, text_changed, undo_redo, now);
     ui.ctx().data_mut(|d| d.insert_temp(id, st));
-    if !commit {
-        return;
+    undoer.feed_state(now, text);
+    if commit {
+        undoer.add_undo(text);
     }
-    let mut undoer = te.state.undoer();
-    undoer.add_undo(&(range, text.to_owned()));
-    te.state.set_undoer(undoer);
 }
 
 /// 新旧文本第一个不同字符下标（按 char，不是 byte）。
