@@ -3,8 +3,8 @@ use std::hash::{Hash, Hasher};
 use std::path::Path;
 
 use egui::{
-    pos2, vec2, Align, Align2, Color32, Frame, Label, Layout, Margin, Rect, RichText, Sense, Shape,
-    Stroke, StrokeKind, Ui, UiBuilder, Vec2,
+    pos2, text_selection::LabelSelectionState, vec2, Align, Align2, Color32, Frame, Label, Layout,
+    Margin, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, Vec2,
 };
 
 use crate::io::imgcache::{ImgCache, Raster};
@@ -168,7 +168,11 @@ fn hash_block(b: &MdBlock, h: &mut impl Hasher) {
 /// 对齐 mdview：指纹前后缀对齐，迁移未变块高度。
 /// 返回脏区 `[lo, hi)`（新块下标）以及折行宽是否变了（变了则视口外也不能跳过）。
 /// 可见块每帧仍会画（链接/折叠/自动序号）；只跳过视口外且未脏的块。
-fn sync_preview_incr(st: &mut PreviewState, blocks: &[MdBlock], page_w: f32) -> (usize, usize, bool) {
+fn sync_preview_incr(
+    st: &mut PreviewState,
+    blocks: &[MdBlock],
+    page_w: f32,
+) -> (usize, usize, bool) {
     let fps: Vec<u64> = blocks.iter().map(block_fp).collect();
     let n = blocks.len();
     let wrap_changed = st.last_page_w > 1.0 && (st.last_page_w - page_w).abs() > 1.0;
@@ -212,10 +216,7 @@ fn bump_skip_state(
             *ol.entry(b.level).or_insert(0) += 1;
         }
     }
-    if b.kind == MdBlockKind::Heading
-        && opts.heading_auto_number
-        && !b.text.trim().is_empty()
-    {
+    if b.kind == MdBlockKind::Heading && opts.heading_auto_number && !b.text.trim().is_empty() {
         let lv = b.level.clamp(1, 6) as i32;
         let _ = head_num.next(lv);
     }
@@ -262,7 +263,9 @@ pub fn show(
                     if doc.blocks.is_empty()
                         || doc.blocks.iter().all(|b| b.kind == MdBlockKind::Blank)
                     {
-                        ui.label(RichText::new(crate::i18n::t().empty_doc).color(c(0x4B, 0x55, 0x63)));
+                        ui.label(
+                            RichText::new(crate::i18n::t().empty_doc).color(c(0x4B, 0x55, 0x63)),
+                        );
                         return;
                     }
                     let (dirty_lo, dirty_hi, wrap_changed) =
@@ -336,7 +339,9 @@ pub fn show_paged(
     }
     let max_h = ui.available_height();
     let avail_w = ui.available_width();
-    let scale = st.word_zoom.clamp(crate::view::ZOOM_MIN, crate::view::ZOOM_MAX);
+    let scale = st
+        .word_zoom
+        .clamp(crate::view::ZOOM_MIN, crate::view::ZOOM_MAX);
     let page_w = WORD_PAGE_W * scale;
     let page_h = WORD_PAGE_H * scale;
     let margin = (WORD_MARGIN * scale).clamp(28.0, 96.0);
@@ -393,7 +398,9 @@ pub fn show_paged(
                             ui.set_min_size(vec2(page_w, page_h));
                             ui.set_max_size(vec2(page_w, page_h));
                             ui.set_max_width(page_w);
-                            ui.set_clip_rect(ui.max_rect().intersect(pane_clip).intersect(page_rect));
+                            ui.set_clip_rect(
+                                ui.max_rect().intersect(pane_clip).intersect(page_rect),
+                            );
                             Frame::new()
                                 .inner_margin(Margin::symmetric(margin as i8, margin as i8))
                                 .show(ui, |ui| {
@@ -503,9 +510,65 @@ fn blank_takes_space(_blocks: &[MdBlock], _i: usize) -> bool {
     true
 }
 
+/// 与 Label 相同：可拖选，但不抢 Tab 焦点。
+fn select_sense() -> Sense {
+    let mut s = Sense::click_and_drag();
+    s -= Sense::FOCUSABLE;
+    s
+}
+
+/// 块间空隙做成可选中 galley，从空白处按下也能拖选中间正文。
+fn sel_gap(ui: &mut Ui, h: f32) {
+    let rem = ui.available_size_before_wrap().x;
+    if !rem.is_finite() || rem <= 0.5 {
+        ui.add_space(h);
+        return;
+    }
+    sel_gap_size(ui, rem, h);
+}
+
+fn sel_gap_size(ui: &mut Ui, w: f32, h: f32) {
+    let h = h.max(1.0);
+    let w = w.max(1.0);
+    let (rect, response) = ui.allocate_exact_size(vec2(w, h), select_sense());
+    let galley = ui.painter().layout_no_wrap(
+        " ".to_owned(),
+        egui::FontId::proportional(1.0),
+        Color32::TRANSPARENT,
+    );
+    LabelSelectionState::label_text_selection(
+        ui,
+        &response,
+        rect.left_top(),
+        galley,
+        Color32::TRANSPARENT,
+        Stroke::NONE,
+    );
+    // 单击空白不留选区；按住拖过才选中中间正文。
+    if response.clicked() {
+        ui.ctx()
+            .plugin::<LabelSelectionState>()
+            .lock()
+            .clear_selection();
+    }
+}
+
+/// 吃掉当前行剩余宽度，短行右侧空白也能起选。已在行首则不动，避免多垫一行。
+fn eat_line_rest(ui: &mut Ui, size: f32) {
+    let rem = ui.available_size_before_wrap().x;
+    let line_w = ui.max_rect().width();
+    if !rem.is_finite() || rem <= 1.0 {
+        return;
+    }
+    if rem >= line_w - 2.0 {
+        return;
+    }
+    sel_gap_size(ui, rem, size * 1.45);
+}
+
 fn show_blank(ui: &mut Ui, blocks: &[MdBlock], i: usize) {
     if blank_takes_space(blocks, i) {
-        ui.add_space(BLANK_H);
+        sel_gap(ui, BLANK_H);
     }
 }
 
@@ -602,9 +665,8 @@ fn render_blocks(
         let y0 = ui.cursor().top();
         let h_cached = st.block_heights.get(gi).copied().unwrap_or(28.0);
         let dirty = gi >= dirty_lo && gi < dirty_hi;
-        let caret_here = caret_line.is_some_and(|cl| {
-            b.kind != MdBlockKind::Blank && b.line0 <= cl && cl <= b.line1
-        });
+        let caret_here = caret_line
+            .is_some_and(|cl| b.kind != MdBlockKind::Blank && b.line0 <= cl && cl <= b.line1);
         let hint_here = record_tops && hint_covers(st, b);
         let offscreen = y0 + h_cached < vis_top || y0 > vis_bot;
         let foldable = b.kind == MdBlockKind::Heading && heading_has_body(blocks, i);
@@ -650,17 +712,7 @@ fn render_blocks(
             MdBlockKind::Blank => show_blank(ui, blocks, i),
             MdBlockKind::Heading => {
                 show_heading(
-                    ui,
-                    b,
-                    head_num,
-                    img,
-                    base,
-                    events,
-                    img_max,
-                    opts,
-                    foldable,
-                    collapsed,
-                    st,
+                    ui, b, head_num, img, base, events, img_max, opts, foldable, collapsed, st,
                     &hint,
                 );
                 if collapsed {
@@ -671,19 +723,17 @@ fn render_blocks(
             MdBlockKind::Quote => show_quote(ui, b, img, base, events, img_max, &hint),
             MdBlockKind::Code => show_code(ui, b, mermaid, img_max, events, st, &hint),
             MdBlockKind::Hr => {
-                ui.add_space(BASE_FS * 1.25);
+                sel_gap(ui, BASE_FS * 1.25);
                 let rect = ui.available_rect_before_wrap();
                 let y = ui.cursor().top();
                 ui.painter()
                     .hline(rect.x_range(), y, Stroke::new(2.0_f32, c(0xD1, 0xD5, 0xDB)));
-                ui.add_space(BASE_FS * 1.25 + 2.0);
+                sel_gap(ui, BASE_FS * 1.25 + 2.0);
             }
-            MdBlockKind::ListItem => {
-                show_list(ui, b, ol, img, base, events, img_max, opts, &hint)
-            }
+            MdBlockKind::ListItem => show_list(ui, b, ol, img, base, events, img_max, opts, &hint),
             MdBlockKind::Table => show_table(ui, b, img, base, events, img_max, page_w, &hint),
             MdBlockKind::Html => {
-                ui.add_space(BASE_FS * 0.5);
+                sel_gap(ui, BASE_FS * 0.5);
                 Frame::new()
                     .fill(c(0xF9, 0xFA, 0xFB))
                     .inner_margin(8.0)
@@ -696,10 +746,10 @@ fn render_blocks(
                             piece_in_sel(&hint, &b.text),
                         ));
                     });
-                ui.add_space(BASE_FS * 0.9);
+                sel_gap(ui, BASE_FS * 0.9);
             }
             MdBlockKind::HtmlImg => {
-                ui.add_space(BASE_FS * 0.5);
+                sel_gap(ui, BASE_FS * 0.5);
                 let href = if b.text.is_empty() {
                     b.spans.first().map(|s| s.href.as_str()).unwrap_or("")
                 } else {
@@ -712,10 +762,10 @@ fn render_blocks(
                     }
                 }
                 show_image(ui, href, "", img, base, max_w, b.img_w, b.img_h, events);
-                ui.add_space(BASE_FS * 0.9);
+                sel_gap(ui, BASE_FS * 0.9);
             }
             MdBlockKind::Details => {
-                ui.add_space(BASE_FS * 0.5);
+                sel_gap(ui, BASE_FS * 0.5);
                 let title = if b.summary.is_empty() {
                     "Details"
                 } else {
@@ -746,7 +796,7 @@ fn render_blocks(
                             false,
                         );
                     });
-                ui.add_space(BASE_FS * 0.9);
+                sel_gap(ui, BASE_FS * 0.9);
             }
         });
         if record_tops {
@@ -850,7 +900,7 @@ fn show_heading(
 ) {
     let lv = b.level.clamp(1, 6) as usize;
     let size = HEAD_SIZES[lv - 1];
-    ui.add_space(BASE_FS * 1.1);
+    sel_gap(ui, BASE_FS * 1.1);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         ui.allocate_ui_with_layout(
@@ -908,9 +958,9 @@ fn show_heading(
         };
         ui.painter()
             .hline(rect.x_range(), y, Stroke::new(1.0_f32, col));
-        ui.add_space(BASE_FS * 0.5 + 2.0);
+        sel_gap(ui, BASE_FS * 0.5 + 2.0);
     } else {
-        ui.add_space(BASE_FS * 0.5);
+        sel_gap(ui, BASE_FS * 0.5);
     }
 }
 
@@ -936,7 +986,7 @@ fn show_paragraph(
     hint: &str,
 ) {
     if b.spans.len() == 1 && b.spans[0].kind == MdSpanKind::Image {
-        ui.add_space(BASE_FS * 0.6);
+        sel_gap(ui, BASE_FS * 0.6);
         show_image(
             ui,
             &b.spans[0].href,
@@ -948,7 +998,7 @@ fn show_paragraph(
             None,
             events,
         );
-        ui.add_space(BASE_FS * 0.9);
+        sel_gap(ui, BASE_FS * 0.9);
         return;
     }
     show_spans(
@@ -963,7 +1013,7 @@ fn show_paragraph(
         false,
         hint,
     );
-    ui.add_space(BASE_FS * 0.75);
+    sel_gap(ui, BASE_FS * 0.75);
 }
 
 fn show_quote(
@@ -975,7 +1025,7 @@ fn show_quote(
     img_max: f32,
     hint: &str,
 ) {
-    ui.add_space(BASE_FS * 0.75);
+    sel_gap(ui, BASE_FS * 0.75);
     let out = Frame::new()
         .fill(c(0xF3, 0xF4, 0xF6))
         .inner_margin(Margin::symmetric(14, 8))
@@ -1000,7 +1050,7 @@ fn show_quote(
         0.0,
         c(0x9C, 0xA3, 0xAF),
     );
-    ui.add_space(BASE_FS);
+    sel_gap(ui, BASE_FS);
 }
 
 fn show_code(
@@ -1024,7 +1074,7 @@ fn show_code(
     let foldable = n_lines > CODE_FOLD_LINES;
     let expanded = st.code_open.contains(&b.line0);
     let folded = foldable && !expanded;
-    ui.add_space(BASE_FS * 0.5);
+    sel_gap(ui, BASE_FS * 0.5);
     let frame_w = ui.available_width();
     Frame::new()
         .fill(c(0xF3, 0xF4, 0xF6))
@@ -1066,13 +1116,10 @@ fn show_code(
                 } else {
                     crate::i18n::code_fold_more(more)
                 };
-                let (rect, resp) = ui.allocate_exact_size(
-                    vec2(ui.available_width().max(8.0), 18.0),
-                    Sense::click(),
-                );
+                let (rect, resp) = ui
+                    .allocate_exact_size(vec2(ui.available_width().max(8.0), 18.0), Sense::click());
                 if resp.hovered() {
-                    ui.painter()
-                        .rect_filled(rect, 0.0, c(0xE5, 0xE7, 0xEB));
+                    ui.painter().rect_filled(rect, 0.0, c(0xE5, 0xE7, 0xEB));
                 }
                 let clicked = resp.clicked();
                 ui.painter().text(
@@ -1097,7 +1144,7 @@ fn show_code(
                 }
             }
         });
-    ui.add_space(BASE_FS * 0.9);
+    sel_gap(ui, BASE_FS * 0.9);
 }
 
 fn show_mermaid(
@@ -1107,7 +1154,7 @@ fn show_mermaid(
     img_max: f32,
     events: &mut Vec<PreviewEvent>,
 ) {
-    ui.add_space(BASE_FS * 0.5);
+    sel_gap(ui, BASE_FS * 0.5);
     Frame::new()
         .fill(Color32::WHITE)
         .stroke(Stroke::new(1.0_f32, c(0xD1, 0xD5, 0xDB)))
@@ -1163,7 +1210,7 @@ fn show_mermaid(
                 }
             }
         });
-    ui.add_space(BASE_FS * 0.9);
+    sel_gap(ui, BASE_FS * 0.9);
 }
 
 fn task_checkbox(ui: &mut Ui, checked: bool) {
@@ -1207,7 +1254,7 @@ fn show_list(
     };
     let tab = opts.tab_size.max(1) as f32;
     let pad = (cols as f32) * LIST_INDENT_STEP / tab;
-    ui.add_space(BASE_FS * 0.12);
+    sel_gap(ui, BASE_FS * 0.12);
     text_flow(ui, |ui| {
         ui.add_space(pad);
         ui.label(
@@ -1232,7 +1279,7 @@ fn show_list(
             hint,
         );
     });
-    ui.add_space(BASE_FS * 0.12);
+    sel_gap(ui, BASE_FS * 0.12);
 }
 
 fn show_table(
@@ -1264,7 +1311,7 @@ fn show_table(
     let border_c = c(0xD1, 0xD5, 0xDB);
     let border = Stroke::new(1.0_f32, border_c);
     let head_bg = c(0xF3, 0xF4, 0xF6);
-    ui.add_space(BASE_FS * 0.5);
+    sel_gap(ui, BASE_FS * 0.5);
     ui.push_id(b.line0, |ui| {
         ui.spacing_mut().item_spacing = Vec2::ZERO;
         let mut row_rects: Vec<Rect> = Vec::new();
@@ -1298,7 +1345,8 @@ fn show_table(
                                         egui::Layout::left_to_right(egui::Align::Min),
                                         |ui| {
                                             ui.set_max_width(inner);
-                                            let col_nowrap = nowrap.get(ci).copied().unwrap_or(false);
+                                            let col_nowrap =
+                                                nowrap.get(ci).copied().unwrap_or(false);
                                             ui.style_mut().wrap_mode = Some(if col_nowrap {
                                                 egui::TextWrapMode::Extend
                                             } else {
@@ -1376,7 +1424,7 @@ fn show_table(
             painter.hline(table_rect.x_range(), r.bottom(), border);
         }
     });
-    ui.add_space(BASE_FS * 0.9);
+    sel_gap(ui, BASE_FS * 0.9);
 }
 
 /// 软换行：吃掉当前行剩余宽度，下一截从整行左缘起排，避免嵌进上一行窄缝。
@@ -1545,9 +1593,7 @@ fn inlines_natural_width(
             MdSpanKind::BoldItalic => pieces_width(ui, &sp.text, |t| {
                 span_style(t, &sp.href, size, color, true, true)
             }),
-            MdSpanKind::Code => {
-                CODE_PAD_X * 2.0 + pieces_width(ui, &sp.text, |t| code_rt(t, size))
-            }
+            MdSpanKind::Code => CODE_PAD_X * 2.0 + pieces_width(ui, &sp.text, |t| code_rt(t, size)),
             MdSpanKind::Mark => pieces_width(ui, &sp.text, |t| {
                 RichText::new(t)
                     .size(size)
@@ -1769,7 +1815,8 @@ fn paint_code_chip(
     bg: Color32,
     size: f32,
 ) {
-    let (rect, _) = ui.allocate_exact_size(vec2(w, h), Sense::hover());
+    // 灰底自绘；文字走 Label 选区，否则跨行内 code 拖选选不中。
+    let (rect, response) = ui.allocate_exact_size(vec2(w, h), select_sense());
     let galley_top = rect.center().y - galley.size().y * 0.5;
     let chip_down = size * CODE_CHIP_DOWN;
     let origin = pos2(
@@ -1787,7 +1834,7 @@ fn paint_code_chip(
         );
         painter.rect_filled(chip, CODE_ROUND, bg);
     }
-    painter.galley(origin, galley, CODE_FG);
+    LabelSelectionState::label_text_selection(ui, &response, origin, galley, CODE_FG, Stroke::NONE);
 }
 
 fn show_spans(
@@ -1814,6 +1861,7 @@ fn show_spans(
                 );
             }
         }
+        eat_line_rest(ui, size);
     };
     if already_wrap {
         add(ui);
