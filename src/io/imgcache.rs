@@ -75,6 +75,11 @@ impl ImgCache {
         }
     }
 
+    pub fn is_failed(&self, href: &str, base: Option<&Path>) -> bool {
+        let key = resolve(href, base);
+        matches!(self.map.get(&key), Some(Status::Failed))
+    }
+
     pub fn get(&mut self, ctx: &Context, href: &str, base: Option<&Path>) -> Option<Raster> {
         if href.is_empty() {
             return None;

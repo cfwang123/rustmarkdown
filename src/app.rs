@@ -16,6 +16,7 @@ use crate::view;
 use crate::view::find::{self, FindBarEvent};
 use crate::view::icons::Icon;
 use crate::view::img_preview::{self, ImgPreview, OverlayAction};
+use crate::view::md_hl::SrcLink;
 use crate::view::preview::{PreviewEvent, PreviewOpts};
 use crate::workspace::{self, ExplorerAction, SidebarTab, Workspace};
 
@@ -191,6 +192,12 @@ enum Dialog {
     Reload { win: usize, tab: usize },
 }
 
+struct PendingImg {
+    href: String,
+    title: String,
+    base: Option<PathBuf>,
+}
+
 pub struct App {
     wins: Vec<Win>,
     cur: usize,
@@ -202,6 +209,7 @@ pub struct App {
     imgcache: ImgCache,
     mermaid: crate::io::mermaid::MermaidCache,
     img_overlay: Option<ImgPreview>,
+    pending_img: Option<PendingImg>,
     settings: Settings,
     settings_draft: Option<Settings>,
     last_session: Option<Session>,
@@ -237,6 +245,7 @@ impl App {
             imgcache: ImgCache::default(),
             mermaid: crate::io::mermaid::MermaidCache::default(),
             img_overlay: None,
+            pending_img: None,
             settings: Settings::load(),
             settings_draft: None,
             last_session: None,
@@ -1999,7 +2008,7 @@ impl App {
                 return;
             }
             let mode = self.win().tabs[active].mode;
-            match mode {
+            let href = match mode {
                 ViewMode::Code => {
                     let tab = &mut self.win_mut().tabs[active];
                     let jump = tab.pending_editor_line.or(tab.pending_jump);
@@ -2017,25 +2026,19 @@ impl App {
                         &find_all,
                         find_cur,
                     );
-                    tab.editor_top_line = ed.top_line;
-                    tab.cursor_line = ed.cursor_line;
-                    tab.sel_chars = ed.sel_chars;
-                    tab.sel_start = ed.sel_start;
-                    tab.sel_end = ed.sel_end;
-                    tab.sel_line0 = ed.sel_line0;
-                    tab.sel_line1 = ed.sel_line1;
-                    tab.sel_byte0 = ed.sel_byte0;
-                    tab.sel_byte1 = ed.sel_byte1;
-                    if ed.changed {
-                        tab.mark_edited();
-                        if tab.find.open {
-                            let text = tab.doc.text.clone();
-                            tab.find.recompute(&text);
-                        }
-                    }
+                    Self::apply_editor_out(tab, ed)
                 }
-                ViewMode::Preview => self.show_preview_pane(ui, active, None),
+                ViewMode::Preview => {
+                    self.show_preview_pane(ui, active, None);
+                    None
+                }
                 ViewMode::Side => self.show_side(ui, active),
+            };
+            if let Some(link) = href {
+                match link {
+                    SrcLink::Href(h) => self.open_href(&h),
+                    SrcLink::Image { href, alt } => self.open_src_image(ui.ctx(), &href, &alt),
+                }
             }
         });
         if let Some(tab) = self.win_mut().active_tab_mut() {
@@ -2043,7 +2046,7 @@ impl App {
         }
     }
 
-    fn show_side(&mut self, ui: &mut egui::Ui, active: usize) {
+    fn show_side(&mut self, ui: &mut egui::Ui, active: usize) -> Option<SrcLink> {
         let full = ui.available_rect_before_wrap();
         ui.advance_cursor_after_rect(full);
         let height = full.height();
@@ -2061,6 +2064,7 @@ impl App {
         let mut ed_off = 0.0f32;
         let mut ed_hovered = false;
         let mut ignore_sync = false;
+        let mut href = None;
         ui.scope_builder(
             egui::UiBuilder::new()
                 .max_rect(left)
@@ -2085,28 +2089,14 @@ impl App {
                     &find_all,
                     find_cur,
                 );
-                tab.editor_top_line = ed.top_line;
-                tab.cursor_line = ed.cursor_line;
-                tab.sel_chars = ed.sel_chars;
-                tab.sel_start = ed.sel_start;
-                tab.sel_end = ed.sel_end;
-                tab.sel_line0 = ed.sel_line0;
-                tab.sel_line1 = ed.sel_line1;
-                tab.sel_byte0 = ed.sel_byte0;
-                tab.sel_byte1 = ed.sel_byte1;
-                if ed.sel_chars > 0 && ed.hovered {
-                    tab.preview.clear_pick();
-                }
-                if ed.changed {
-                    tab.mark_edited();
-                    if tab.find.open {
-                        let text = tab.doc.text.clone();
-                        tab.find.recompute(&text);
-                    }
-                }
                 ed_off = ed.offset_y;
                 ed_hovered = ed.hovered;
                 ignore_sync = ed.ignore_scroll_sync;
+                let sel = ed.sel_chars > 0 && ed.hovered;
+                href = Self::apply_editor_out(tab, ed);
+                if sel {
+                    tab.preview.clear_pick();
+                }
             },
         );
 
@@ -2141,6 +2131,7 @@ impl App {
             },
         );
         self.win_mut().tabs[active].apply_side_sync(ed_off, ed_hovered, ignore_sync);
+        href
     }
 
     fn show_pdf_pane(&mut self, ui: &mut egui::Ui, active: usize) {
@@ -2345,6 +2336,26 @@ impl App {
         }
     }
 
+    fn apply_editor_out(tab: &mut Tab, ed: view::editor::EditorOut) -> Option<SrcLink> {
+        tab.editor_top_line = ed.top_line;
+        tab.cursor_line = ed.cursor_line;
+        tab.sel_chars = ed.sel_chars;
+        tab.sel_start = ed.sel_start;
+        tab.sel_end = ed.sel_end;
+        tab.sel_line0 = ed.sel_line0;
+        tab.sel_line1 = ed.sel_line1;
+        tab.sel_byte0 = ed.sel_byte0;
+        tab.sel_byte1 = ed.sel_byte1;
+        if ed.changed {
+            tab.mark_edited();
+            if tab.find.open {
+                let text = tab.doc.text.clone();
+                tab.find.recompute(&text);
+            }
+        }
+        ed.clicked_link
+    }
+
     fn handle_preview_events(&mut self, events: Vec<PreviewEvent>) {
         for e in events {
             match e {
@@ -2355,6 +2366,60 @@ impl App {
                 PreviewEvent::CopyImage(r) => self.copy_image(&r),
                 PreviewEvent::CopyAsFile(r) => self.copy_image_file(&r),
             }
+        }
+    }
+
+    fn img_title(alt: &str, href: &str) -> String {
+        if !alt.trim().is_empty() {
+            return alt.trim().to_string();
+        }
+        href.rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("图片")
+            .to_string()
+    }
+
+    fn open_src_image(&mut self, ctx: &egui::Context, href: &str, alt: &str) {
+        let href = href.trim();
+        if href.is_empty() {
+            return;
+        }
+        let base = self.win().active_tab().and_then(|t| t.doc.path.clone());
+        let title = Self::img_title(alt, href);
+        if self.imgcache.is_failed(href, base.as_deref()) {
+            self.status = format!("无法加载图片：{href}");
+            return;
+        }
+        if let Some(raster) = self.imgcache.get(ctx, href, base.as_deref()) {
+            self.pending_img = None;
+            self.img_overlay = Some(ImgPreview::new(title, raster));
+            return;
+        }
+        self.pending_img = Some(PendingImg {
+            href: href.to_string(),
+            title,
+            base,
+        });
+        self.status = "正在加载图片…".to_string();
+        ctx.request_repaint();
+    }
+
+    fn poll_pending_img(&mut self, ctx: &egui::Context) {
+        self.imgcache.poll(ctx);
+        let Some(p) = self.pending_img.as_ref() else {
+            return;
+        };
+        let href = p.href.clone();
+        let title = p.title.clone();
+        let base = p.base.clone();
+        if self.imgcache.is_failed(&href, base.as_deref()) {
+            self.pending_img = None;
+            self.status = format!("无法加载图片：{href}");
+            return;
+        }
+        if let Some(raster) = self.imgcache.get(ctx, &href, base.as_deref()) {
+            self.pending_img = None;
+            self.img_overlay = Some(ImgPreview::new(title, raster));
         }
     }
 
@@ -3124,6 +3189,7 @@ impl eframe::App for App {
         self.poll_incoming(ctx);
         self.handle_dropped(ctx);
         self.poll_watch();
+        self.poll_pending_img(ctx);
         self.show_dialogs(ctx);
         self.show_settings(ctx);
         self.ui_window(ctx, 0);

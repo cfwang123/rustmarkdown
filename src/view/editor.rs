@@ -17,6 +17,8 @@ pub struct EditorOut {
     pub hovered: bool,
     /// 撤销/重做引起的位移，侧栏同步应忽略，避免当成用户滚动。
     pub ignore_scroll_sync: bool,
+    /// Ctrl+点击源码链接。
+    pub clicked_link: Option<crate::view::md_hl::SrcLink>,
 }
 
 pub fn show(
@@ -41,6 +43,7 @@ pub fn show(
         offset_y: 0.0,
         hovered: false,
         ignore_scroll_sync: false,
+        clicked_link: None,
     };
     let mut ui = crate::view::pane_ui(ui);
     ui.painter()
@@ -70,30 +73,34 @@ pub fn show(
                 find_cur,
             };
             let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                crate::view::md_hl::layout_galley(
-                    ui,
-                    buf.as_str(),
-                    wrap_width.max(1.0),
-                    &overlay,
-                    sticky,
-                )
+                crate::view::md_hl::layout_galley(ui, buf.as_str(), wrap_width.max(1.0), sticky)
             };
             let mut te = egui::TextEdit::multiline(text)
-                .id_salt("editor")
+                .id_salt(crate::view::md_hl::EDITOR_ID_SALT)
                 .code_editor()
                 .desired_width(pane_w)
                 .desired_rows(8)
                 .frame(false)
                 .layouter(&mut layouter)
                 .show(ui);
+            let clip = te.text_clip_rect.intersect(ui.clip_rect());
             ui.painter().set(
                 fence_bg_idx,
-                fence_block_bg(
-                    te.galley.as_ref(),
-                    te.galley_pos,
-                    te.text_clip_rect.intersect(ui.clip_rect()),
-                    te.response.rect,
-                    text,
+                merge_bg(
+                    fence_block_bg(
+                        te.galley.as_ref(),
+                        te.galley_pos,
+                        clip,
+                        te.response.rect,
+                        text,
+                    ),
+                    crate::view::md_hl::overlay_bgs(
+                        te.galley.as_ref(),
+                        te.galley_pos,
+                        clip,
+                        text,
+                        &overlay,
+                    ),
                 ),
             );
             out.changed = te.response.changed();
@@ -140,11 +147,39 @@ pub fn show(
                     ui.scroll_to_rect(rect, Some(egui::Align::TOP));
                 }
             }
+            let ctrl = ui.input(|i| i.modifiers.command || i.modifiers.ctrl);
+            if ctrl {
+                if let Some(pos) = te.response.hover_pos() {
+                    let ch = te.galley.cursor_from_pos(pos - te.galley_pos).index;
+                    if let Some(link) = crate::view::md_hl::link_at_char(text, ch) {
+                        ui.ctx()
+                            .set_cursor_icon(egui::CursorIcon::PointingHand);
+                        if te.response.clicked() {
+                            out.clicked_link = Some(link);
+                        }
+                    }
+                }
+            }
         });
     out.offset_y = sa.state.offset.y;
     let pane = ui.max_rect();
     out.hovered = ui.rect_contains_pointer(pane);
     out
+}
+
+fn merge_bg(a: Shape, b: Shape) -> Shape {
+    match (a, b) {
+        (Shape::Noop, x) | (x, Shape::Noop) => x,
+        (Shape::Vec(mut v), Shape::Vec(w)) => {
+            v.extend(w);
+            Shape::Vec(v)
+        }
+        (Shape::Vec(mut v), x) | (x, Shape::Vec(mut v)) => {
+            v.push(x);
+            Shape::Vec(v)
+        }
+        (x, y) => Shape::Vec(vec![x, y]),
+    }
 }
 
 fn fence_block_bg(

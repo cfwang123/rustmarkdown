@@ -6,7 +6,9 @@ description = "Native Markdown preview and editor"
 license = "MIT"
 
 [dependencies]
-eframe = "0.33"
+# 关掉 accesskit：Windows 无障碍接口会在窗口出现数秒后要整棵树，
+# egui 给源码每一行建节点，两千行文档会卡约 1 秒。
+eframe = { version = "0.33", default-features = false, features = ["default_fonts", "glow"] }
 egui = "0.33"
 rfd = "0.15"
 regex = "1"

@@ -2,9 +2,10 @@
 //! LayoutJob 文本必须与源码逐字节一致，否则 TextEdit 光标会错位。
 
 use std::hash::{Hash, Hasher};
-use std::sync::{LazyLock, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 
-use egui::{Align, Color32, FontId, Stroke, TextFormat, TextStyle};
+use egui::epaint::text::RowVisuals;
+use egui::{pos2, Align, Color32, FontId, Rect, Shape, Stroke, TextFormat, TextStyle};
 
 use crate::view::highlight::LineHl;
 use crate::view::theme;
@@ -47,13 +48,15 @@ struct GalleyEntry {
     hash: u64,
     font_sz: u32,
     wrap: u32,
-    extra: u64,
-    galley: std::sync::Arc<egui::Galley>,
+    galley: Arc<egui::Galley>,
 }
 
 const GALLEY_SLOTS: usize = 8;
 const WRAP_QUANT: u32 = 8;
-const STICKY_WRAP_SLACK: u32 = 32;
+/// 折行宽差在此内复用 Galley（滚动条显隐约 12–16px）。
+const WRAP_SLACK: u32 = 64;
+/// 光标附近保留实网格的行数（上下各这么多），其余选中行掏空网格以免拖选复制整篇。
+const SEL_KEEP_ROWS: usize = 64;
 
 struct FenceCache {
     hash: u64,
@@ -112,7 +115,7 @@ pub fn layout_job(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
     }
 }
 
-/// 查找命中 / 预览映射到底的叠加层。空则只排正文。
+/// 查找命中 / 预览映射到底的叠加层。画在已排版文字上，不参与 Galley 缓存键。
 pub struct LayoutOverlay<'a> {
     pub hint: Option<(usize, usize)>,
     pub find_all: &'a [(usize, usize)],
@@ -120,12 +123,17 @@ pub struct LayoutOverlay<'a> {
 }
 
 impl LayoutOverlay<'_> {
+    #[cfg(test)]
     fn extra_key(&self) -> u64 {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         self.hint.hash(&mut h);
         self.find_all.hash(&mut h);
         self.find_cur.hash(&mut h);
         h.finish()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.hint.is_none() && self.find_all.is_empty() && self.find_cur.is_none()
     }
 }
 
@@ -134,20 +142,20 @@ fn quantize_wrap(wrap_width: f32) -> u32 {
     q.max(1).saturating_mul(WRAP_QUANT).min(100_000)
 }
 
+fn wrap_close(a: u32, b: u32, sticky: bool) -> bool {
+    sticky || a == b || a.abs_diff(b) <= WRAP_SLACK
+}
+
 fn galley_lookup(
     hash: u64,
     font_sz: u32,
     wrap: u32,
-    extra: u64,
     sticky_wrap: bool,
-) -> Option<std::sync::Arc<egui::Galley>> {
+) -> Option<Arc<egui::Galley>> {
     let mut g = GALLEY.lock().unwrap_or_else(|e| e.into_inner());
-    let pos = g.iter().position(|e| {
-        e.hash == hash
-            && e.font_sz == font_sz
-            && e.extra == extra
-            && (e.wrap == wrap || (sticky_wrap && e.wrap.abs_diff(wrap) <= STICKY_WRAP_SLACK))
-    })?;
+    let pos = g
+        .iter()
+        .position(|e| e.hash == hash && e.font_sz == font_sz && wrap_close(e.wrap, wrap, sticky_wrap))?;
     let e = g.remove(pos);
     let galley = e.galley.clone();
     g.insert(0, e);
@@ -156,62 +164,259 @@ fn galley_lookup(
 
 fn galley_store(entry: GalleyEntry) {
     let mut g = GALLEY.lock().unwrap_or_else(|e| e.into_inner());
-    g.retain(|e| {
-        !(e.hash == entry.hash
-            && e.font_sz == entry.font_sz
-            && e.wrap == entry.wrap
-            && e.extra == entry.extra)
-    });
+    g.retain(|e| !(e.hash == entry.hash && e.font_sz == entry.font_sz && e.wrap == entry.wrap));
     g.insert(0, entry);
     g.truncate(GALLEY_SLOTS);
 }
 
-/// 按当前字号与折行宽取 Galley；文本/叠加层未改时复用。
-/// `sticky_wrap`：拖选时折行宽微变仍用上一份，避免整篇重排卡几秒。
+/// 按当前字号与折行宽取 Galley；文本未改时复用。
+/// 查找/映射底色改为叠画，不进缓存键。`sticky_wrap`：拖选时忽略折行宽，避免整篇重排。
 pub fn layout_galley(
     ui: &egui::Ui,
     text: &str,
     wrap_width: f32,
-    overlay: &LayoutOverlay<'_>,
     sticky_wrap: bool,
-) -> std::sync::Arc<egui::Galley> {
+) -> Arc<egui::Galley> {
     let font = TextStyle::Monospace.resolve(ui.style());
     let font_sz = font.size.to_bits();
     let wrap = quantize_wrap(wrap_width);
     let hash = hash_text(text);
-    let extra = overlay.extra_key();
-    if let Some(g) = galley_lookup(hash, font_sz, wrap, extra, sticky_wrap) {
-        return g;
-    }
-    let mut job = layout_job(ui, text);
-    if let Some((a, b)) = overlay.hint {
-        apply_sel_bg(&mut job, text, a, b);
-    }
-    if !overlay.find_all.is_empty() {
-        let bg = Color32::from_rgba_unmultiplied(0xFE, 0xF0, 0x8A, 140);
-        apply_byte_bgs(&mut job, overlay.find_all, bg, false);
-    }
-    if let Some(cur) = overlay.find_cur {
-        let bg = Color32::from_rgba_unmultiplied(0xFD, 0xBA, 0x74, 200);
-        apply_byte_bgs(&mut job, &[cur], bg, true);
-    }
-    job.wrap.max_width = wrap as f32;
-    job.wrap.break_anywhere = true;
-    let galley = ui.fonts_mut(|f| f.layout_job(job));
-    galley_store(GalleyEntry {
-        hash,
-        font_sz,
-        wrap,
-        extra,
-        galley: galley.clone(),
-    });
-    galley
+    let galley = if let Some(g) = galley_lookup(hash, font_sz, wrap, sticky_wrap) {
+        g
+    } else {
+        let mut job = layout_job(ui, text);
+        job.wrap.max_width = wrap as f32;
+        job.wrap.break_anywhere = true;
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        galley_store(GalleyEntry {
+            hash,
+            font_sz,
+            wrap,
+            galley: galley.clone(),
+        });
+        galley
+    };
+    hollow_offscreen_sel(ui, galley)
 }
 
 fn hash_text(text: &str) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     text.hash(&mut h);
     h.finish()
+}
+
+/// 与 `TextEdit::id_salt` 一致，供取出拖选范围。
+pub const EDITOR_ID_SALT: &str = "editor";
+
+fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
+    static DUMMY: LazyLock<Mutex<Option<Arc<egui::epaint::text::Row>>>> =
+        LazyLock::new(|| Mutex::new(None));
+    {
+        let g = DUMMY.lock().unwrap_or_else(|e| e.into_inner());
+        if g.is_some() {
+            return g.clone();
+        }
+    }
+    let font = TextStyle::Monospace.resolve(ui.style());
+    let job = egui::text::LayoutJob::simple(" ".into(), font, Color32::WHITE, 64.0);
+    let laid = ui.fonts_mut(|f| f.layout_job(job));
+    let row = laid.rows.first()?.row.clone();
+    let mut g = DUMMY.lock().unwrap_or_else(|e| e.into_inner());
+    *g = Some(row.clone());
+    Some(row)
+}
+
+/// egui 拖选会 `Arc::make_mut` 每一行网格。缓存的行是共享的，长选区每帧复制整篇会卡数秒。
+/// 只给光标附近行保留实网格，其余选中行换成无网格副本（字数/行高仍对，光标不错位）。
+fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
+    let id = ui.make_persistent_id(EDITOR_ID_SALT);
+    let Some(state) = egui::TextEdit::load_state(ui.ctx(), id) else {
+        return galley;
+    };
+    let Some(range) = state.cursor.char_range() else {
+        return galley;
+    };
+    if range.is_empty() {
+        return galley;
+    }
+    let [min, max] = range.sorted_cursors();
+    let min_row = galley.layout_from_cursor(min).row;
+    let max_row = galley.layout_from_cursor(max).row;
+    let lo = min_row.min(max_row);
+    let hi = min_row.max(max_row);
+    let keep = galley.layout_from_cursor(range.primary).row;
+    let keep_lo = keep.saturating_sub(SEL_KEEP_ROWS);
+    let keep_hi = keep.saturating_add(SEL_KEEP_ROWS);
+    if hi.saturating_sub(lo) <= SEL_KEEP_ROWS * 2 {
+        return galley;
+    }
+    let Some(dummy) = dummy_row(ui) else {
+        return galley;
+    };
+    let mut g = (*galley).clone();
+    for ri in lo..=hi.min(g.rows.len().saturating_sub(1)) {
+        if ri >= keep_lo && ri <= keep_hi {
+            continue;
+        }
+        let src = &g.rows[ri].row;
+        let mut row = (*dummy).clone();
+        row.glyphs.clone_from(&src.glyphs);
+        row.size = src.size;
+        row.ends_with_newline = src.ends_with_newline;
+        row.visuals = RowVisuals::default();
+        g.rows[ri].row = Arc::new(row);
+    }
+    Arc::new(g)
+}
+
+/// 查找命中与预览映射底色：叠在已排版行上，避免为此重排整篇。
+pub fn overlay_bgs(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip: Rect,
+    text: &str,
+    overlay: &LayoutOverlay<'_>,
+) -> Shape {
+    if overlay.is_empty() {
+        return Shape::Noop;
+    }
+    let mut ranges: Vec<(usize, usize, Color32)> = Vec::new();
+    if let Some((a, b)) = overlay.hint {
+        let lo = a.min(b);
+        let hi = a.max(b);
+        if lo < hi {
+            ranges.push((
+                lo,
+                hi,
+                Color32::from_rgba_unmultiplied(0x93, 0xC5, 0xFD, 120),
+            ));
+        }
+    }
+    for &(c0, c1) in &byte_ranges_to_chars(text, overlay.find_all) {
+        ranges.push((
+            c0,
+            c1,
+            Color32::from_rgba_unmultiplied(0xFE, 0xF0, 0x8A, 140),
+        ));
+    }
+    if let Some((b0, b1)) = overlay.find_cur {
+        if let Some((c0, c1)) = byte_ranges_to_chars(text, &[(b0, b1)]).into_iter().next() {
+            ranges.push((
+                c0,
+                c1,
+                Color32::from_rgba_unmultiplied(0xFD, 0xBA, 0x74, 200),
+            ));
+        }
+    }
+    paint_char_bgs(galley, galley_pos, clip, &ranges)
+}
+
+fn byte_ranges_to_chars(text: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
+    if ranges.is_empty() {
+        return Vec::new();
+    }
+    let mut marks: Vec<(usize, usize, bool)> = Vec::with_capacity(ranges.len() * 2);
+    for (i, &(a, b)) in ranges.iter().enumerate() {
+        if a >= b {
+            continue;
+        }
+        marks.push((a.min(text.len()), i, false));
+        marks.push((b.min(text.len()), i, true));
+    }
+    marks.sort_unstable_by_key(|m| m.0);
+    let mut char_at = vec![0usize; ranges.len() * 2];
+    let mut mi = 0usize;
+    let mut char_i = 0usize;
+    let mut byte_i = 0usize;
+    for c in text.chars() {
+        while mi < marks.len() && marks[mi].0 == byte_i {
+            char_at[mi] = char_i;
+            mi += 1;
+        }
+        if mi >= marks.len() {
+            break;
+        }
+        byte_i += c.len_utf8();
+        char_i += 1;
+    }
+    while mi < marks.len() {
+        char_at[mi] = char_i;
+        mi += 1;
+    }
+    let mut starts = vec![0usize; ranges.len()];
+    let mut ends = vec![0usize; ranges.len()];
+    for (k, &(_, i, is_end)) in marks.iter().enumerate() {
+        if is_end {
+            ends[i] = char_at[k];
+        } else {
+            starts[i] = char_at[k];
+        }
+    }
+    ranges
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &(a, b))| {
+            if a >= b {
+                None
+            } else {
+                Some((starts[i], ends[i]))
+            }
+        })
+        .filter(|(a, b)| a < b)
+        .collect()
+}
+
+fn paint_char_bgs(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip: Rect,
+    ranges: &[(usize, usize, Color32)],
+) -> Shape {
+    if ranges.is_empty() {
+        return Shape::Noop;
+    }
+    let mut shapes: Vec<Shape> = Vec::new();
+    let mut char_i = 0usize;
+    for row in &galley.rows {
+        let n = row.char_count_including_newline();
+        let c0 = char_i;
+        let c1 = char_i + n;
+        char_i = c1;
+        let r = row.rect().translate(galley_pos.to_vec2());
+        if r.bottom() < clip.top() - 2.0 || r.top() > clip.bottom() + 2.0 {
+            continue;
+        }
+        let n_ex = row.char_count_excluding_newline();
+        for &(a, b, col) in ranges {
+            if a >= c1 || b <= c0 {
+                continue;
+            }
+            let col0 = a.saturating_sub(c0).min(n_ex);
+            let col1 = if b >= c1 {
+                n_ex
+            } else {
+                b.saturating_sub(c0).min(n_ex)
+            };
+            let x0 = r.left() + row.x_offset(col0);
+            let x1 = if b >= c1 {
+                r.right().max(x0 + 2.0)
+            } else {
+                r.left() + row.x_offset(col1)
+            };
+            if x1 - x0 < 0.5 {
+                continue;
+            }
+            let rect = Rect::from_min_max(pos2(x0, r.top()), pos2(x1, r.bottom())).intersect(clip);
+            if rect.width() > 0.5 && rect.height() > 0.5 {
+                shapes.push(Shape::rect_filled(rect, 0.0, col));
+            }
+        }
+    }
+    match shapes.len() {
+        0 => Shape::Noop,
+        1 => shapes.remove(0),
+        _ => Shape::Vec(shapes),
+    }
 }
 
 fn build(text: &str, faces: &Faces) -> egui::text::LayoutJob {
@@ -341,7 +546,8 @@ fn char_to_byte(text: &str, n: usize) -> usize {
 }
 
 /// 给源码区间加淡蓝底（预览选区映射到编辑器）。
-pub fn apply_sel_bg(job: &mut egui::text::LayoutJob, text: &str, char0: usize, char1: usize) {
+#[cfg(test)]
+fn apply_sel_bg(job: &mut egui::text::LayoutJob, text: &str, char0: usize, char1: usize) {
     let b0 = char_to_byte(text, char0.min(char1));
     let b1 = char_to_byte(text, char0.max(char1));
     if b0 >= b1 {
@@ -386,58 +592,6 @@ pub fn apply_sel_bg(job: &mut egui::text::LayoutJob, text: &str, char0: usize, c
         }
     }
     job.sections = out;
-}
-
-/// 按字节区间铺底色（查找命中）。`force` 覆盖已有底。
-pub fn apply_byte_bgs(
-    job: &mut egui::text::LayoutJob,
-    ranges: &[(usize, usize)],
-    bg: Color32,
-    force: bool,
-) {
-    for &(b0, b1) in ranges {
-        if b0 >= b1 {
-            continue;
-        }
-        let old = std::mem::take(&mut job.sections);
-        let mut out = Vec::with_capacity(old.len() + 4);
-        for sec in old {
-            let s = sec.byte_range.start;
-            let e = sec.byte_range.end;
-            if e <= b0 || s >= b1 {
-                out.push(sec);
-                continue;
-            }
-            if s < b0 {
-                out.push(egui::text::LayoutSection {
-                    leading_space: sec.leading_space,
-                    byte_range: s..b0,
-                    format: sec.format.clone(),
-                });
-            }
-            let hs = s.max(b0);
-            let he = e.min(b1);
-            if hs < he {
-                let mut f = sec.format.clone();
-                if force || f.background.a() == 0 {
-                    f.background = bg;
-                }
-                out.push(egui::text::LayoutSection {
-                    leading_space: if hs == s { sec.leading_space } else { 0.0 },
-                    byte_range: hs..he,
-                    format: f,
-                });
-            }
-            if b1 < e {
-                out.push(egui::text::LayoutSection {
-                    leading_space: 0.0,
-                    byte_range: b1..e,
-                    format: sec.format,
-                });
-            }
-        }
-        job.sections = out;
-    }
 }
 
 fn color_line(
@@ -749,17 +903,9 @@ fn color_inlines(
                 let j = i + 1 + rel;
                 if j > i {
                     flush(job, buf_from, i);
-                    append(job, font, "`", MARKER, Color32::TRANSPARENT, false, false);
-                    append(
-                        job,
-                        font,
-                        &text[i + 1..j],
-                        CODE,
-                        Color32::TRANSPARENT,
-                        false,
-                        false,
-                    );
-                    append(job, font, "`", MARKER, Color32::TRANSPARENT, false, false);
+                    append(job, font, "`", MARKER, CODE_BG, false, false);
+                    append(job, font, &text[i + 1..j], CODE, CODE_BG, false, false);
+                    append(job, font, "`", MARKER, CODE_BG, false, false);
                     i = j + 1;
                     buf_from = i;
                     continue;
@@ -979,6 +1125,117 @@ fn color_inlines(
     flush(job, buf_from, n);
 }
 
+/// 源码可跳转目标。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SrcLink {
+    Href(String),
+    Image { href: String, alt: String },
+}
+
+/// 源码光标处的链接（`[文字](href)`、`![alt](src)` 或 `http(s)://`）。围栏代码、行内 code 不算。
+pub fn link_at_char(text: &str, char_idx: usize) -> Option<SrcLink> {
+    if text.is_empty() {
+        return None;
+    }
+    let n_chars = text.chars().count();
+    let char_idx = char_idx.min(n_chars.saturating_sub(1));
+    for &(a, b) in &fence_char_spans(text) {
+        if char_idx >= a && char_idx < b {
+            return None;
+        }
+    }
+    let byte = char_to_byte(text, char_idx);
+    let line_start = text[..byte].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    let line_end = text[byte..].find('\n').map(|i| byte + i).unwrap_or(text.len());
+    link_in_line(text, line_start, line_end, byte)
+}
+
+fn link_in_line(text: &str, start: usize, end: usize, byte: usize) -> Option<SrcLink> {
+    let mut i = start;
+    while i < end {
+        let b = text.as_bytes()[i];
+        if b == b'`' {
+            if let Some(rel) = text[i + 1..end].find('`') {
+                let j = i + 1 + rel;
+                if byte >= i && byte <= j {
+                    return None;
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        if b == b'!' && i + 1 < end && text.as_bytes()[i + 1] == b'[' {
+            if let Some((link_end, lab_a, lab_b, href_a, href_b)) = link_parts(text, i + 1) {
+                if byte >= i && byte < link_end {
+                    let href = clean_href(&text[href_a..href_b]);
+                    if href.is_empty() {
+                        return None;
+                    }
+                    return Some(SrcLink::Image {
+                        href,
+                        alt: text[lab_a..lab_b].to_string(),
+                    });
+                }
+                i = link_end.min(end);
+                continue;
+            }
+        }
+        if b == b'[' {
+            if let Some((link_end, _, _, href_a, href_b)) = link_parts(text, i) {
+                if byte >= i && byte < link_end {
+                    let href = clean_href(&text[href_a..href_b]);
+                    if !href.is_empty() {
+                        return Some(SrcLink::Href(href));
+                    }
+                    return None;
+                }
+                i = link_end.min(end);
+                continue;
+            }
+        }
+        if b == b'h' && (text[i..].starts_with("http://") || text[i..].starts_with("https://")) {
+            let mut j = i;
+            while j < end {
+                let c = text.as_bytes()[j];
+                if c.is_ascii_whitespace() || c == b')' {
+                    break;
+                }
+                j += 1;
+            }
+            while j > i {
+                let prev = text.as_bytes()[j - 1];
+                if matches!(prev, b'.' | b',' | b';' | b':') {
+                    j -= 1;
+                } else {
+                    break;
+                }
+            }
+            if byte >= i && byte < j {
+                return Some(SrcLink::Href(text[i..j].to_string()));
+            }
+            i = j;
+            continue;
+        }
+        let ch = text[i..].chars().next()?;
+        i += ch.len_utf8();
+    }
+    None
+}
+
+fn clean_href(raw: &str) -> String {
+    let s = raw.trim();
+    let s = s
+        .strip_prefix('<')
+        .and_then(|x| x.strip_suffix('>'))
+        .unwrap_or(s)
+        .trim();
+    let cut = s
+        .find(|c| c == '"' || c == '\'')
+        .map(|i| s[..i].trim())
+        .unwrap_or(s);
+    cut.to_string()
+}
+
 fn link_parts(text: &str, open_bracket: usize) -> Option<(usize, usize, usize, usize, usize)> {
     if open_bracket >= text.len() || text.as_bytes()[open_bracket] != b'[' {
         return None;
@@ -1076,6 +1333,21 @@ mod tests {
     }
 
     #[test]
+    fn inline_code_has_preview_gray_bg() {
+        let job = job_of("say `xx` ok\n");
+        let hit = job.sections.iter().any(|s| {
+            s.format.background == CODE_BG && job.text[s.byte_range.clone()].contains("xx")
+        });
+        assert!(hit);
+        let ticks = job
+            .sections
+            .iter()
+            .filter(|s| &job.text[s.byte_range.clone()] == "`")
+            .all(|s| s.format.background == CODE_BG);
+        assert!(ticks);
+    }
+
+    #[test]
     fn crlf_preserved() {
         let s = "# A\r\npara\r\n";
         assert_eq!(job_of(s).text, s);
@@ -1099,6 +1371,57 @@ mod tests {
         let open = "```\nfoo";
         assert_eq!(fence_char_spans(open), vec![(0, open.chars().count())]);
         assert!(fence_char_spans("# hi\npara\n").is_empty());
+    }
+
+    fn char_of(s: &str, byte: usize) -> usize {
+        s[..byte].chars().count()
+    }
+
+    #[test]
+    fn href_at_hash_and_md() {
+        let s = "见 [节](#标题) 和 [文](a.md#x)\n";
+        let a = s.find("节").unwrap();
+        let b = s.find("a.md").unwrap();
+        assert_eq!(
+            link_at_char(s, char_of(s, a)),
+            Some(SrcLink::Href("#标题".into()))
+        );
+        assert_eq!(
+            link_at_char(s, char_of(s, b)),
+            Some(SrcLink::Href("a.md#x".into()))
+        );
+    }
+
+    #[test]
+    fn href_skips_fence_and_code() {
+        let s = "```\n[x](#a)\n```\n`[y](#b)` [z](c.md)\n";
+        let x = s.find("[x]").unwrap() + 1;
+        let y = s.find("[y]").unwrap() + 1;
+        let z = s.find("[z]").unwrap() + 1;
+        assert!(link_at_char(s, char_of(s, x)).is_none());
+        assert!(link_at_char(s, char_of(s, y)).is_none());
+        assert_eq!(
+            link_at_char(s, char_of(s, z)),
+            Some(SrcLink::Href("c.md".into()))
+        );
+    }
+
+    #[test]
+    fn href_image_and_md() {
+        let s = "![图](a.png) [去](b.md)\n";
+        let img = s.find("图").unwrap();
+        let md = s.find("去").unwrap();
+        assert_eq!(
+            link_at_char(s, char_of(s, img)),
+            Some(SrcLink::Image {
+                href: "a.png".into(),
+                alt: "图".into(),
+            })
+        );
+        assert_eq!(
+            link_at_char(s, char_of(s, md)),
+            Some(SrcLink::Href("b.md".into()))
+        );
     }
 
     #[test]
@@ -1151,6 +1474,25 @@ mod tests {
         assert_eq!(quantize_wrap(15.0), 16);
         assert_eq!(quantize_wrap(1.0), 8);
         assert_eq!(quantize_wrap(20.0), 24);
+    }
+
+    #[test]
+    fn wrap_slack_reuses_nearby_width() {
+        assert!(wrap_close(800, 800, false));
+        assert!(wrap_close(800, 848, false));
+        assert!(wrap_close(800, 864, false));
+        assert!(!wrap_close(800, 880, false));
+        assert!(wrap_close(800, 2000, true));
+    }
+
+    #[test]
+    fn byte_ranges_to_chars_ascii_and_cjk() {
+        let s = "ab你好cd";
+        // "你" starts at byte 2, "好" at 5, "c" at 8
+        let out = byte_ranges_to_chars(s, &[(2, 8)]);
+        assert_eq!(out, vec![(2, 4)]);
+        let multi = byte_ranges_to_chars(s, &[(0, 2), (8, 10)]);
+        assert_eq!(multi, vec![(0, 2), (4, 6)]);
     }
 
     #[test]
