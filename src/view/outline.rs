@@ -276,7 +276,8 @@ pub fn show(
     ensure_expanded(entries, expanded, inited);
     let mut action = None;
     let bg = Color32::from_rgb(0xF3, 0xF3, 0xF3);
-    ui.painter().rect_filled(ui.max_rect(), 0.0, bg);
+    ui.painter()
+        .rect_filled(ui.available_rect_before_wrap(), 0.0, bg);
     ui.style_mut().interaction.selectable_labels = false;
 
     Frame::new()

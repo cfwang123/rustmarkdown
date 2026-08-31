@@ -239,3 +239,84 @@ fn paint_refresh(p: &Painter, r: Rect, s: Stroke) {
     p.line_segment([tip, tip + vec2(3.2, -1.2)], s);
     p.line_segment([tip, tip + vec2(-0.4, -3.4)], s);
 }
+
+/// 目录树：文件夹线标（避免每帧排 emoji 字形）。
+pub fn paint_tree_folder(p: &Painter, r: Rect, color: Color32) {
+    let s = Stroke::new(1.2_f32, color);
+    let l = r.left() + 0.5;
+    let t = r.top() + 2.0;
+    let rt = r.right() - 0.5;
+    let b = r.bottom() - 1.0;
+    let tab = (r.width() * 0.42).clamp(5.0, 7.5);
+    p.add(egui::Shape::closed_line(
+        vec![
+            pos2(l, t + 3.5),
+            pos2(l, t),
+            pos2(l + tab, t),
+            pos2(l + tab + 2.0, t + 3.5),
+        ],
+        s,
+    ));
+    p.rect_stroke(
+        Rect::from_min_max(pos2(l, t + 3.0), pos2(rt, b)),
+        CornerRadius::same(1),
+        s,
+        StrokeKind::Middle,
+    );
+}
+
+/// 目录树：文件线标。
+pub fn paint_tree_file(p: &Painter, r: Rect, color: Color32) {
+    let s = Stroke::new(1.2_f32, color);
+    let fold = 3.2;
+    let l = r.left() + 1.5;
+    let t = r.top() + 1.0;
+    let rt = r.right() - 1.0;
+    let b = r.bottom() - 1.0;
+    p.add(egui::Shape::closed_line(
+        vec![
+            pos2(l, t),
+            pos2(rt - fold, t),
+            pos2(rt, t + fold),
+            pos2(rt, b),
+            pos2(l, b),
+        ],
+        s,
+    ));
+    p.line_segment([pos2(rt - fold, t), pos2(rt - fold, t + fold)], s);
+    p.line_segment([pos2(rt - fold, t + fold), pos2(rt, t + fold)], s);
+}
+
+/// 目录树：图片线标。
+pub fn paint_tree_image(p: &Painter, r: Rect, color: Color32) {
+    let s = Stroke::new(1.2_f32, color);
+    p.rect_stroke(r.shrink(1.0), CornerRadius::same(1), s, StrokeKind::Middle);
+    let c = r.center();
+    p.circle_filled(pos2(r.left() + 5.0, r.top() + 5.0), 1.3, color);
+    p.line_segment([pos2(r.left() + 2.5, r.bottom() - 3.0), pos2(c.x - 1.0, c.y + 0.5)], s);
+    p.line_segment([pos2(c.x - 1.0, c.y + 0.5), pos2(c.x + 1.5, r.bottom() - 4.0)], s);
+    p.line_segment([pos2(c.x + 1.5, r.bottom() - 4.0), pos2(r.right() - 2.5, r.bottom() - 2.5)], s);
+}
+
+/// 目录树：展开三角。
+pub fn paint_tree_chevron(p: &Painter, r: Rect, open: bool, color: Color32) {
+    let c = r.center();
+    let (a, b, d) = if open {
+        (
+            pos2(c.x - 3.6, c.y - 1.6),
+            pos2(c.x + 3.6, c.y - 1.6),
+            pos2(c.x, c.y + 3.2),
+        )
+    } else {
+        (
+            pos2(c.x - 1.4, c.y - 3.6),
+            pos2(c.x - 1.4, c.y + 3.6),
+            pos2(c.x + 3.4, c.y),
+        )
+    };
+    p.add(egui::Shape::convex_polygon(
+        vec![a, b, d],
+        color,
+        Stroke::NONE,
+    ));
+}

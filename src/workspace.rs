@@ -9,6 +9,8 @@ use crate::io::file;
 use crate::view::icons::{self, Icon};
 
 const HIST_CAP: usize = 32;
+const DIR_FG: Color32 = Color32::from_rgb(0x7A, 0x4E, 0x1A);
+const DIR_FG_SEL: Color32 = Color32::from_rgb(0x4A, 0x2E, 0x0E);
 
 #[derive(Clone, Debug)]
 pub struct FsEntry {
@@ -68,6 +70,9 @@ impl Workspace {
     }
 
     fn load(&mut self, dir: &Path) {
+        if crate::io::log::enabled() {
+            crate::io::log::write(&format!("explorer.load {}", dir.display()));
+        }
         let mut ents = Vec::new();
         let rd = match std::fs::read_dir(dir) {
             Ok(r) => r,
@@ -172,6 +177,7 @@ impl Workspace {
 }
 
 pub fn show(ui: &mut Ui, ws: &mut Workspace) -> Option<ExplorerAction> {
+    let t0 = std::time::Instant::now();
     let mut action = None;
     ui.style_mut().interaction.selectable_labels = false;
     ui.horizontal(|ui| {
@@ -237,6 +243,7 @@ pub fn show(ui: &mut Ui, ws: &mut Workspace) -> Option<ExplorerAction> {
                 action = Some(a);
             }
         });
+    crate::io::log::slow("explorer.show", t0, crate::io::log::SPAN_MS);
     action
 }
 
@@ -249,29 +256,32 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
     for ent in ents {
         let selected = ws.selected.as_ref().is_some_and(|p| p == &ent.path);
         let open = ent.is_dir && ws.expanded.contains(&ent.path);
-        let color = if ent.is_dir {
-            Color32::from_rgb(0xDC, 0xB6, 0x7A)
-        } else if file::is_openable_file(&ent.path) {
-            ui.visuals().text_color()
-        } else {
-            Color32::from_gray(130)
-        };
-        let icon = if ent.is_dir {
-            "📁"
+        let kind = if ent.is_dir {
+            RowKind::Dir
         } else if file::is_image_ext(&ent.path) {
-            "🖼"
-        } else if file::is_openable_file(&ent.path) {
-            "📄"
+            RowKind::Image
+        } else if file::kind_of(&ent.path).is_some() {
+            RowKind::File
         } else {
-            "·"
+            RowKind::Other
+        };
+        let color = match kind {
+            RowKind::Dir => {
+                if selected {
+                    DIR_FG_SEL
+                } else {
+                    DIR_FG
+                }
+            }
+            RowKind::File | RowKind::Image => ui.visuals().text_color(),
+            RowKind::Other => Color32::from_gray(110),
         };
         let hit = tree_row(
             ui,
             depth,
-            ent.is_dir,
+            kind,
             open,
             selected,
-            icon,
             &ent.name,
             color,
             &ent.path,
@@ -298,27 +308,29 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
         } else if hit.secondary {
             ws.selected = Some(ent.path.clone());
         }
-        hit.resp.context_menu(|ui| {
-            if ent.is_dir && ui.button("设为工作目录").clicked() {
-                if ws.navigate(ent.path.clone()) {
-                    action = Some(ExplorerAction::RootChanged);
+        if hit.resp.hovered() || hit.resp.secondary_clicked() {
+            hit.resp.context_menu(|ui| {
+                if ent.is_dir && ui.button("设为工作目录").clicked() {
+                    if ws.navigate(ent.path.clone()) {
+                        action = Some(ExplorerAction::RootChanged);
+                    }
+                    ui.close();
                 }
-                ui.close();
-            }
-            if !ent.is_dir && ui.button("打开").clicked() {
-                ws.selected = Some(ent.path.clone());
-                action = Some(ExplorerAction::Open(ent.path.clone()));
-                ui.close();
-            }
-            if ui.button("在资源管理器中显示").clicked() {
-                action = Some(ExplorerAction::Reveal(ent.path.clone()));
-                ui.close();
-            }
-            if ui.button("复制路径").clicked() {
-                action = Some(ExplorerAction::CopyPath(ent.path.clone()));
-                ui.close();
-            }
-        });
+                if !ent.is_dir && ui.button("打开").clicked() {
+                    ws.selected = Some(ent.path.clone());
+                    action = Some(ExplorerAction::Open(ent.path.clone()));
+                    ui.close();
+                }
+                if ui.button("在资源管理器中显示").clicked() {
+                    action = Some(ExplorerAction::Reveal(ent.path.clone()));
+                    ui.close();
+                }
+                if ui.button("复制路径").clicked() {
+                    action = Some(ExplorerAction::CopyPath(ent.path.clone()));
+                    ui.close();
+                }
+            });
+        }
         if ent.is_dir && ws.expanded.contains(&ent.path) {
             if let Some(a) = show_dir(ui, ws, &ent.path, depth + 1) {
                 action = Some(a);
@@ -336,13 +348,20 @@ struct RowHit {
     resp: egui::Response,
 }
 
+#[derive(Clone, Copy)]
+enum RowKind {
+    Dir,
+    File,
+    Image,
+    Other,
+}
+
 fn tree_row(
     ui: &mut Ui,
     depth: u32,
-    is_dir: bool,
+    kind: RowKind,
     open: bool,
     selected: bool,
-    icon: &str,
     name: &str,
     color: Color32,
     path: &Path,
@@ -351,6 +370,16 @@ fn tree_row(
     let w = ui.available_width().max(48.0);
     let (rect, mut resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
     resp = resp.on_hover_cursor(CursorIcon::Default);
+    let visible = rect.intersects(ui.clip_rect());
+    if !visible {
+        return RowHit {
+            clicked: false,
+            double_clicked: false,
+            chevron: false,
+            secondary: false,
+            resp,
+        };
+    }
     if resp.hovered() {
         ui.ctx().set_cursor_icon(CursorIcon::Default);
     }
@@ -368,30 +397,37 @@ fn tree_row(
     let indent = depth as f32 * 14.0;
     let mut x = rect.left() + 4.0 + indent;
     let mut chevron = false;
+    let is_dir = matches!(kind, RowKind::Dir);
     if is_dir {
         let chev_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(16.0, h));
         let chev = ui
             .interact(chev_rect, ui.id().with(path).with("chev"), Sense::click())
             .on_hover_cursor(CursorIcon::Default);
-        let tri = if open { "▼" } else { "▶" };
-        let galley = ui.painter().layout_no_wrap(
-            tri.to_string(),
-            FontId::proportional(10.0),
-            Color32::from_rgb(0x9C, 0xA3, 0xAF),
+        let tri_r = Rect::from_center_size(chev_rect.center(), vec2(10.0, 10.0));
+        icons::paint_tree_chevron(
+            ui.painter(),
+            tri_r,
+            open,
+            Color32::from_rgb(0x6B, 0x72, 0x80),
         );
-        let tp = pos2(
-            chev_rect.center().x - galley.size().x * 0.5,
-            rect.center().y - galley.size().y * 0.5,
-        );
-        ui.painter().galley(tp, galley, Color32::from_rgb(0x9C, 0xA3, 0xAF));
         chevron = chev.clicked();
         x += 16.0;
     } else {
         x += 16.0;
     }
-    let label = format!("{icon} {name}");
+    let icon_r = Rect::from_center_size(pos2(x + 7.0, rect.center().y), vec2(14.0, 14.0));
+    match kind {
+        RowKind::Dir => icons::paint_tree_folder(ui.painter(), icon_r, color),
+        RowKind::Image => icons::paint_tree_image(ui.painter(), icon_r, color),
+        RowKind::File => icons::paint_tree_file(ui.painter(), icon_r, color),
+        RowKind::Other => {
+            ui.painter()
+                .circle_filled(icon_r.center(), 1.6, Color32::from_gray(150));
+        }
+    }
+    x += 16.0;
     let galley = ui.painter().layout_no_wrap(
-        label,
+        name.to_string(),
         FontId::proportional(13.0),
         color,
     );
@@ -401,7 +437,9 @@ fn tree_row(
     ui.painter()
         .with_clip_rect(clip)
         .galley(text_pos, galley, color);
-    resp = resp.on_hover_text(path.display().to_string());
+    if resp.hovered() {
+        resp = resp.on_hover_text(path.display().to_string());
+    }
     RowHit {
         clicked: resp.clicked() && !chevron,
         double_clicked: resp.double_clicked() && !chevron,

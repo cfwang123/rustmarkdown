@@ -2000,8 +2000,11 @@ impl App {
                     follow,
                 );
             } else {
-                ui.painter()
-                    .rect_filled(ui.max_rect(), 0.0, Color32::from_rgb(0xF3, 0xF3, 0xF3));
+                ui.painter().rect_filled(
+                    ui.available_rect_before_wrap(),
+                    0.0,
+                    Color32::from_rgb(0xF3, 0xF3, 0xF3),
+                );
                 ui.add_space(8.0);
                 ui.label(
                     RichText::new("当前文档无章节")
