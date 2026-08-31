@@ -38,10 +38,18 @@ const TASK_DONE_FG: Color32 = Color32::from_rgb(0x04, 0x78, 0x57);
 const TASK_DONE_BG: Color32 = Color32::from_rgb(0xD1, 0xFA, 0xE5);
 const MAX_CHARS: usize = 250_000;
 
+struct HlLine {
+    hash: u64,
+    in_fence: bool,
+    sec_end: usize,
+    byte_end: usize,
+}
+
 struct Cache {
     hash: u64,
     font_sz: u32,
     job: egui::text::LayoutJob,
+    lines: Vec<HlLine>,
 }
 
 struct GalleyEntry {
@@ -113,13 +121,7 @@ pub fn layout_job(ui: &egui::Ui, text: &str) -> egui::text::LayoutJob {
             bold: FontId::new(font.size, theme::mono_bold_family()),
             heading: FontId::new(font.size, theme::mono_bold_family()),
         };
-        let job = build(text, &faces);
-        *g = Some(Cache {
-            hash,
-            font_sz,
-            job: job.clone(),
-        });
-        job
+        incr_highlight(text, &faces, font_sz, hash, &mut g)
     }
 }
 
@@ -326,14 +328,14 @@ fn layout_by_paragraphs(
     }
     let mut mem = PARA.lock().unwrap_or_else(|e| e.into_inner());
     let (lo, hi_old, hi_new) = match mem.as_ref() {
-        Some(m) if m.wrap == wrap && m.font_sz == font_sz => {
+        Some(m) if m.font_sz == font_sz && wrap_close(m.wrap, wrap, false) => {
             crate::view::incr::diff_fps(&m.keys, &keys)
         }
         _ => (0, 0, keys.len()),
     };
     let mut galleys: Vec<Option<Arc<egui::Galley>>> = vec![None; ranges.len()];
     if let Some(m) = mem.as_ref() {
-        if m.wrap == wrap && m.font_sz == font_sz {
+        if m.font_sz == font_sz && wrap_close(m.wrap, wrap, false) {
             for i in 0..lo {
                 if let Some(g) = m.galleys.get(i) {
                     galleys[i] = Some(g.clone());
@@ -584,13 +586,255 @@ fn paint_char_bgs(
     }
 }
 
-fn build(text: &str, faces: &Faces) -> egui::text::LayoutJob {
+fn line_body(chunk: &str) -> &str {
+    let mut s = chunk;
+    if s.ends_with('\n') {
+        s = &s[..s.len() - 1];
+    }
+    if s.ends_with('\r') {
+        s = &s[..s.len() - 1];
+    }
+    s
+}
+
+fn color_chunk(
+    job: &mut egui::text::LayoutJob,
+    faces: &Faces,
+    chunk: &str,
+    in_fence: &mut bool,
+    fence_ch: &mut char,
+    hl: &mut Option<LineHl>,
+) {
+    let has_nl = chunk.ends_with('\n');
+    let raw = if has_nl {
+        &chunk[..chunk.len() - 1]
+    } else {
+        chunk
+    };
+    let cr = raw.ends_with('\r');
+    let line = if cr { &raw[..raw.len() - 1] } else { raw };
+    color_line(job, faces, line, in_fence, fence_ch, hl);
+    if cr {
+        append(
+            job,
+            &faces.regular,
+            "\r",
+            BODY,
+            Color32::TRANSPARENT,
+            false,
+            false,
+        );
+    }
+    if has_nl {
+        append(
+            job,
+            &faces.regular,
+            "\n",
+            BODY,
+            Color32::TRANSPARENT,
+            false,
+            false,
+        );
+    }
+}
+
+fn highlight_full(text: &str, faces: &Faces) -> (egui::text::LayoutJob, Vec<HlLine>) {
     let mut job = egui::text::LayoutJob::default();
     job.wrap.max_width = f32::INFINITY;
+    let mut lines = Vec::new();
     if text.is_empty() {
+        return (job, lines);
+    }
+    let mut in_fence = false;
+    let mut fence_ch = '\0';
+    let mut hl: Option<LineHl> = None;
+    let mut byte_end = 0usize;
+    for chunk in text.split_inclusive('\n') {
+        color_chunk(&mut job, faces, chunk, &mut in_fence, &mut fence_ch, &mut hl);
+        byte_end += chunk.len();
+        lines.push(HlLine {
+            hash: hash_text(chunk),
+            in_fence,
+            sec_end: job.sections.len(),
+            byte_end,
+        });
+    }
+    debug_assert_eq!(job.text, text);
+    (job, lines)
+}
+
+fn incr_highlight(
+    text: &str,
+    faces: &Faces,
+    font_sz: u32,
+    hash: u64,
+    mem: &mut Option<Cache>,
+) -> egui::text::LayoutJob {
+    if text.is_empty() || text.len() > MAX_CHARS {
+        let job = build(text, faces);
+        *mem = None;
         return job;
     }
+    let do_full = match mem.as_ref() {
+        None => true,
+        Some(c) => c.font_sz != font_sz || c.lines.is_empty(),
+    };
+    if do_full {
+        return store_full(text, faces, font_sz, hash, mem);
+    }
+    let chunks: Vec<&str> = text.split_inclusive('\n').collect();
+    let hashes: Vec<u64> = chunks.iter().map(|c| hash_text(c)).collect();
+    let prev = mem.as_ref().unwrap();
+    let old_h: Vec<u64> = prev.lines.iter().map(|l| l.hash).collect();
+    let (mut lo, mut hi_old, mut hi_new) = crate::view::incr::diff_fps(&old_h, &hashes);
+    while lo > 0 && prev.lines[lo - 1].in_fence {
+        lo -= 1;
+    }
+    let fence = (lo..hi_old).any(|i| {
+        prev.lines
+            .get(i)
+            .map(|l| l.in_fence || (i > 0 && prev.lines[i - 1].in_fence))
+            .unwrap_or(false)
+    }) || chunks
+        .get(lo)
+        .is_some_and(|c| try_fence(line_body(c)).is_some())
+        || (lo > 0 && lo <= prev.lines.len() && prev.lines[lo - 1].in_fence);
+    if fence {
+        while lo > 0 && prev.lines[lo - 1].in_fence {
+            lo -= 1;
+        }
+        let mut ho = (lo + 1).min(prev.lines.len());
+        while ho < prev.lines.len() && prev.lines[ho - 1].in_fence {
+            ho += 1;
+        }
+        hi_old = ho;
+        hi_new = hi_new.max(lo);
+    }
+    if lo == 0 && hi_new == hashes.len() && hi_old == old_h.len() {
+        return store_full(text, faces, font_sz, hash, mem);
+    }
+
+    let mut mid = egui::text::LayoutJob::default();
+    mid.wrap.max_width = f32::INFINITY;
+    let mut in_fence = false;
+    let mut fence_ch = '\0';
+    let mut hl: Option<LineHl> = None;
+    let mut mid_lines: Vec<HlLine> = Vec::new();
+    let mut i = lo;
+    while i < chunks.len() {
+        color_chunk(
+            &mut mid,
+            faces,
+            chunks[i],
+            &mut in_fence,
+            &mut fence_ch,
+            &mut hl,
+        );
+        mid_lines.push(HlLine {
+            hash: hashes[i],
+            in_fence,
+            sec_end: mid.sections.len(),
+            byte_end: mid.text.len(),
+        });
+        i += 1;
+        if i >= hi_new && !in_fence {
+            break;
+        }
+    }
+    hi_new = i;
+    let n_suf = hashes.len() - hi_new;
+    if n_suf != old_h.len().saturating_sub(hi_old) {
+        return store_full(text, faces, font_sz, hash, mem);
+    }
+
+    let prev = mem.as_mut().unwrap();
+    let sec_lo = if lo == 0 {
+        0
+    } else {
+        prev.lines[lo - 1].sec_end
+    };
+    let sec_hi = if hi_old == 0 {
+        0
+    } else {
+        prev.lines[hi_old - 1].sec_end
+    };
+    let byte_lo = if lo == 0 {
+        0
+    } else {
+        prev.lines[lo - 1].byte_end
+    };
+    let byte_hi_old = if hi_old == 0 {
+        0
+    } else {
+        prev.lines[hi_old - 1].byte_end
+    };
+
+    let mut secs = std::mem::take(&mut prev.job.sections);
+    let mut suffix: Vec<egui::text::LayoutSection> = if sec_hi <= secs.len() {
+        secs.split_off(sec_hi)
+    } else {
+        Vec::new()
+    };
+    secs.truncate(sec_lo);
+
+    let delta = (byte_lo + mid.text.len()) as isize - byte_hi_old as isize;
+    for s in &mut suffix {
+        s.byte_range.start = (s.byte_range.start as isize + delta) as usize;
+        s.byte_range.end = (s.byte_range.end as isize + delta) as usize;
+    }
+    for s in &mut mid.sections {
+        s.byte_range.start += byte_lo;
+        s.byte_range.end += byte_lo;
+    }
+    secs.append(&mut mid.sections);
+    secs.append(&mut suffix);
+
+    let suf_old = prev.lines.split_off(hi_old.min(prev.lines.len()));
+    prev.lines.truncate(lo);
+    let sec_mid_base = prev.lines.last().map(|l| l.sec_end).unwrap_or(0);
+    for mut ln in mid_lines {
+        ln.sec_end += sec_mid_base;
+        ln.byte_end += byte_lo;
+        prev.lines.push(ln);
+    }
+    let sec_after_mid = prev.lines.last().map(|l| l.sec_end).unwrap_or(0);
+    for (k, mut ln) in suf_old.into_iter().enumerate() {
+        ln.hash = hashes[hi_new + k];
+        ln.sec_end = sec_after_mid + ln.sec_end.saturating_sub(sec_hi);
+        ln.byte_end = (ln.byte_end as isize + delta) as usize;
+        prev.lines.push(ln);
+    }
+
+    prev.hash = hash;
+    prev.font_sz = font_sz;
+    prev.job.text = text.to_owned();
+    prev.job.sections = secs;
+    prev.job.wrap.max_width = f32::INFINITY;
+    debug_assert_eq!(prev.job.text, text);
+    prev.job.clone()
+}
+
+fn store_full(
+    text: &str,
+    faces: &Faces,
+    font_sz: u32,
+    hash: u64,
+    mem: &mut Option<Cache>,
+) -> egui::text::LayoutJob {
+    let (job, lines) = highlight_full(text, faces);
+    *mem = Some(Cache {
+        hash,
+        font_sz,
+        job: job.clone(),
+        lines,
+    });
+    job
+}
+
+fn build(text: &str, faces: &Faces) -> egui::text::LayoutJob {
     if text.len() > MAX_CHARS {
+        let mut job = egui::text::LayoutJob::default();
+        job.wrap.max_width = f32::INFINITY;
         append(
             &mut job,
             &faces.regular,
@@ -602,44 +846,7 @@ fn build(text: &str, faces: &Faces) -> egui::text::LayoutJob {
         );
         return job;
     }
-    let mut in_fence = false;
-    let mut fence_ch = '\0';
-    let mut hl: Option<LineHl> = None;
-    for chunk in text.split_inclusive('\n') {
-        let has_nl = chunk.ends_with('\n');
-        let raw = if has_nl {
-            &chunk[..chunk.len() - 1]
-        } else {
-            chunk
-        };
-        let cr = raw.ends_with('\r');
-        let line = if cr { &raw[..raw.len() - 1] } else { raw };
-        color_line(&mut job, faces, line, &mut in_fence, &mut fence_ch, &mut hl);
-        if cr {
-            append(
-                &mut job,
-                &faces.regular,
-                "\r",
-                BODY,
-                Color32::TRANSPARENT,
-                false,
-                false,
-            );
-        }
-        if has_nl {
-            append(
-                &mut job,
-                &faces.regular,
-                "\n",
-                BODY,
-                Color32::TRANSPARENT,
-                false,
-                false,
-            );
-        }
-    }
-    debug_assert_eq!(job.text, text);
-    job
+    highlight_full(text, faces).0
 }
 
 /// 围栏代码（含开/闭标记行）的字符区间 `[start, end)`，供整行铺灰底。
@@ -1480,6 +1687,45 @@ mod tests {
         let s = "# Title\n\nHello **bold** and `code`\n- item [link](https://a)\n```rs\nfn x() {}\n```\n";
         let job = job_of(s);
         assert_eq!(job.text, s);
+    }
+
+    fn assert_jobs_eq(a: &egui::text::LayoutJob, b: &egui::text::LayoutJob) {
+        assert_eq!(a.text, b.text);
+        assert_eq!(a.sections.len(), b.sections.len());
+        for (x, y) in a.sections.iter().zip(b.sections.iter()) {
+            assert_eq!(x.byte_range, y.byte_range);
+            assert_eq!(x.format.color, y.format.color);
+            assert_eq!(x.format.background, y.format.background);
+        }
+    }
+
+    fn incr_then(a: &str, b: &str) -> (egui::text::LayoutJob, egui::text::LayoutJob) {
+        let faces = faces();
+        let sz = 13.0f32.to_bits();
+        let mut mem = None;
+        let _ = incr_highlight(a, &faces, sz, hash_text(a), &mut mem);
+        let incr = incr_highlight(b, &faces, sz, hash_text(b), &mut mem);
+        (incr, build(b, &faces))
+    }
+
+    #[test]
+    fn incr_edit_one_line_matches_full() {
+        let (incr, full) = incr_then("# Title\nhello world\n- item\n", "# Title\nhello W\n- item\n");
+        assert_jobs_eq(&incr, &full);
+    }
+
+    #[test]
+    fn incr_insert_line_matches_full() {
+        let (incr, full) = incr_then("aaa\nccc\n", "aaa\nbbb\nccc\n");
+        assert_jobs_eq(&incr, &full);
+    }
+
+    #[test]
+    fn incr_edit_inside_fence_matches_full() {
+        let a = "before\n```rs\nfn a() {}\nfn b() {}\n```\nafter\n";
+        let b = "before\n```rs\nfn a() { x }\nfn b() {}\n```\nafter\n";
+        let (incr, full) = incr_then(a, b);
+        assert_jobs_eq(&incr, &full);
     }
 
     #[test]
