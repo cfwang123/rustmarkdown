@@ -191,6 +191,7 @@ impl Win {
 
 enum Dialog {
     CloseTab(usize),
+    CloseOthers(usize),
     CloseAll,
     Quit,
     About,
@@ -704,6 +705,41 @@ impl App {
         } else {
             self.close_all_tabs();
             self.status = t().closed_all.to_string();
+        }
+    }
+
+    /// 关闭除 `keep` 外的全部标签（按 tab id 跟踪，避免下标移位误删）。
+    fn close_other_tabs(&mut self, keep: usize) {
+        let Some(keep_id) = self.win().tabs.get(keep).map(|t| t.id) else {
+            return;
+        };
+        while self.win().tabs.len() > 1 {
+            let idx = self
+                .win()
+                .tabs
+                .iter()
+                .position(|t| t.id != keep_id)
+                .unwrap_or(0);
+            self.close_tab(idx);
+        }
+        self.win_mut().active = 0;
+        self.status = t().closed_others.to_string();
+    }
+
+    fn request_close_others(&mut self, keep: usize) {
+        if keep >= self.win().tabs.len() {
+            return;
+        }
+        let others_dirty = self
+            .win()
+            .tabs
+            .iter()
+            .enumerate()
+            .any(|(i, t)| i != keep && t.doc.dirty);
+        if others_dirty {
+            self.dialog = Some(Dialog::CloseOthers(keep));
+        } else {
+            self.close_other_tabs(keep);
         }
     }
 
@@ -1534,6 +1570,8 @@ impl App {
             match ev {
                 TabBarEvent::Select(i) => self.win_mut().active = i,
                 TabBarEvent::Close(i) => self.request_close_tab(i),
+                TabBarEvent::CloseOthers(i) => self.request_close_others(i),
+                TabBarEvent::CloseAll => self.request_close_all(),
                 TabBarEvent::Reorder { from, to } => {
                     let win = self.win_mut();
                     if from < win.tabs.len() && to < win.tabs.len() {
@@ -2934,6 +2972,58 @@ impl App {
                 }
                 if close_dialog {
                     self.dialog = None;
+                }
+            }
+            Some(Dialog::CloseOthers(keep)) => {
+                let keep = *keep;
+                let mut action = 0;
+                egui::Window::new(t().close_others)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(t().close_others_confirm);
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(t().save_all).clicked() {
+                                action = 1;
+                            }
+                            if ui.button(t().close_without_save).clicked() {
+                                action = 2;
+                            }
+                            if ui.button(t().cancel).clicked() {
+                                action = 3;
+                            }
+                        });
+                    });
+                match action {
+                    1 => {
+                        // 只保存待关闭的脏标签，保留的标签不动。
+                        let keep_id = self.win().tabs.get(keep).map(|t| t.id);
+                        let n = self.win().tabs.len();
+                        let mut ok = true;
+                        for i in 0..n {
+                            if self.win().tabs[i].doc.dirty
+                                && Some(self.win().tabs[i].id) != keep_id
+                            {
+                                self.win_mut().active = i;
+                                if !self.save_active(false) {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if ok {
+                            self.dialog = None;
+                            self.close_other_tabs(keep);
+                        }
+                    }
+                    2 => {
+                        self.dialog = None;
+                        self.close_other_tabs(keep);
+                    }
+                    3 => self.dialog = None,
+                    _ => {}
                 }
             }
             Some(Dialog::CloseAll) => {

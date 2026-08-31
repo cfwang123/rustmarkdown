@@ -102,6 +102,9 @@ tr_def! {
     save_as: "另存为...", "Save As...";
     close: "关闭", "Close";
     close_all: "关闭全部", "Close All";
+    close_others: "关闭其它", "Close Others";
+    close_others_confirm: "有未保存的更改。关闭其它标签？", "There are unsaved changes. Close other tabs?";
+    closed_others: "已关闭其它标签", "Closed other tabs";
     reopen_tab: "重新打开关闭的标签", "Reopen Closed Tab";
     copy_file_path: "复制文件路径", "Copy File Path";
     reveal_in_explorer: "在资源管理器中显示", "Show in Explorer";

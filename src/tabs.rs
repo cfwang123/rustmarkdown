@@ -5,6 +5,8 @@ use crate::doc::Tab;
 pub enum TabBarEvent {
     Select(usize),
     Close(usize),
+    CloseOthers(usize),
+    CloseAll,
     Reorder { from: usize, to: usize },
     TearOff(usize),
     OpenAsWorkspace(usize),
@@ -89,6 +91,19 @@ pub fn show(
                             .as_ref()
                             .and_then(|p| p.parent())
                             .is_some_and(|d| !d.as_os_str().is_empty());
+                        if ui.button(crate::i18n::t().close).clicked() {
+                            event = Some(TabBarEvent::Close(i));
+                            ui.close();
+                        }
+                        if ui.button(crate::i18n::t().close_others).clicked() {
+                            event = Some(TabBarEvent::CloseOthers(i));
+                            ui.close();
+                        }
+                        if ui.button(crate::i18n::t().close_all).clicked() {
+                            event = Some(TabBarEvent::CloseAll);
+                            ui.close();
+                        }
+                        ui.separator();
                         if ui
                             .add_enabled(has_dir, egui::Button::new(crate::i18n::t().open_as_workspace))
                             .clicked()
