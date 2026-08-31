@@ -283,6 +283,13 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
                 ws.expanded.insert(ent.path.clone());
             }
             ws.selected = Some(ent.path.clone());
+        } else if hit.double_clicked && ent.is_dir {
+            if open {
+                ws.expanded.remove(&ent.path);
+            } else {
+                ws.expanded.insert(ent.path.clone());
+            }
+            ws.selected = Some(ent.path.clone());
         } else if hit.clicked {
             ws.selected = Some(ent.path.clone());
             if !ent.is_dir {
@@ -292,6 +299,12 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
             ws.selected = Some(ent.path.clone());
         }
         hit.resp.context_menu(|ui| {
+            if ent.is_dir && ui.button("设为工作目录").clicked() {
+                if ws.navigate(ent.path.clone()) {
+                    action = Some(ExplorerAction::RootChanged);
+                }
+                ui.close();
+            }
             if !ent.is_dir && ui.button("打开").clicked() {
                 ws.selected = Some(ent.path.clone());
                 action = Some(ExplorerAction::Open(ent.path.clone()));
@@ -317,6 +330,7 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
 
 struct RowHit {
     clicked: bool,
+    double_clicked: bool,
     chevron: bool,
     secondary: bool,
     resp: egui::Response,
@@ -390,6 +404,7 @@ fn tree_row(
     resp = resp.on_hover_text(path.display().to_string());
     RowHit {
         clicked: resp.clicked() && !chevron,
+        double_clicked: resp.double_clicked() && !chevron,
         chevron,
         secondary: resp.secondary_clicked(),
         resp,
