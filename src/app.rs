@@ -81,6 +81,7 @@ enum MenuCmd {
     OpenFolder,
     Save,
     SaveAs,
+    VimPassword,
     Close,
     CloseAll,
     Reopen,
@@ -193,10 +194,17 @@ enum Dialog {
     CloseTab(usize),
     CloseOthers(usize),
     CloseAll,
+    VimPassword,
     Quit,
     About,
     Error(String),
     Reload { win: usize, tab: usize },
+}
+
+/// 等待 Vim 密码输入的场景：打开新文件，或已打开标签重输密码。
+enum VimAsk {
+    Open { win: usize, path: PathBuf },
+    Retype { win: usize, tab: usize },
 }
 
 struct PendingImg {
@@ -227,6 +235,8 @@ pub struct App {
     saw_ptr_down: bool,
     last_screen_ptr: Option<egui::Pos2>,
     incoming: Option<crate::io::single::Incoming>,
+    vim_ask: Option<VimAsk>,
+    vim_pw: String,
 }
 
 impl App {
@@ -263,6 +273,8 @@ impl App {
             saw_ptr_down: false,
             last_screen_ptr: None,
             incoming: Some(incoming),
+            vim_ask: None,
+            vim_pw: String::new(),
         };
         crate::io::single::attach_ui(&cc.egui_ctx);
         i18n::set(app.settings.ui_lang);
@@ -499,7 +511,21 @@ impl App {
         let tab_size = self.settings.md_tab_size;
         let tab = match kind {
             DocKind::Markdown => {
-                let (text, newline, enc) = file::read_text(&path)?;
+                let bytes = file::read_bytes(&path)?;
+                if let Some(method) = crate::io::vimcrypt::header_method(&bytes) {
+                    if method != 3 {
+                        self.dialog = Some(Dialog::Error(t().vim_unsupported_method.to_string()));
+                        return Ok(());
+                    }
+                    self.vim_ask = Some(VimAsk::Open {
+                        win: win_i,
+                        path: path.clone(),
+                    });
+                    self.vim_pw.clear();
+                    self.dialog = Some(Dialog::VimPassword);
+                    return Ok(());
+                }
+                let (text, newline, enc) = file::decode_bytes(&bytes);
                 Tab::new(
                     id,
                     DocSession::from_file(path.clone(), text, newline, enc),
@@ -570,6 +596,84 @@ impl App {
         self.remember_file(&path);
         self.status = i18n::opened(&file_label(&path));
         Ok(())
+    }
+
+    /// Vim 密码确认后：解密成功则按普通 Markdown 建标签。
+    fn finish_vim_open(
+        &mut self,
+        win_i: usize,
+        path: &Path,
+        plain: &[u8],
+        secret: crate::io::vimcrypt::VimSecret,
+    ) {
+        let id = self.alloc_id();
+        let (text, newline, enc) = file::decode_bytes(plain);
+        let mut tab = Tab::new(
+            id,
+            DocSession::from_file(path.to_path_buf(), text, newline, enc),
+            ViewMode::Preview,
+            self.settings.md_tab_size,
+        );
+        tab.doc.vim = Some(secret);
+        let remembered = find_file_view(&self.file_views, path).map(|v| (v.mode(), v.line()));
+        let win = &mut self.wins[win_i];
+        win.tabs.push(tab);
+        win.active = win.tabs.len() - 1;
+        if let Some((mode, line)) = remembered {
+            if let Some(t) = win.tabs.last_mut() {
+                t.apply_saved_view(mode, line);
+            }
+        }
+        self.sync_watch();
+        self.remember_file(path);
+        self.status = i18n::opened(&file_label(path));
+    }
+
+    /// Vim 密码框确认：打开新文件或用新密码重解已打开标签。
+    fn vim_submit(&mut self) {
+        let Some(ask) = self.vim_ask.take() else {
+            return;
+        };
+        let pw = std::mem::take(&mut self.vim_pw);
+        match ask {
+            VimAsk::Open { win, path } => {
+                let res = file::read_bytes(&path)
+                    .and_then(|b| Ok((crate::io::vimcrypt::decrypt(&b, &pw)?, b)));
+                match res {
+                    Ok(((plain, secret), _)) => self.finish_vim_open(win, &path, &plain, secret),
+                    Err(e) => self.dialog = Some(Dialog::Error(e)),
+                }
+            }
+            VimAsk::Retype { win, tab } => {
+                let Some(path) = self
+                    .wins
+                    .get(win)
+                    .and_then(|w| w.tabs.get(tab))
+                    .and_then(|t| t.doc.path.clone())
+                else {
+                    return;
+                };
+                match file::read_bytes(&path).and_then(|b| crate::io::vimcrypt::decrypt(&b, &pw)) {
+                    Ok((plain, secret)) => {
+                        let ts = self.settings.md_tab_size;
+                        if let Some(t) =
+                            self.wins.get_mut(win).and_then(|w| w.tabs.get_mut(tab))
+                        {
+                            let (text, nl, enc) = file::decode_bytes(&plain);
+                            t.doc.text = text;
+                            t.doc.newline = nl;
+                            t.doc.enc = enc;
+                            t.doc.vim = Some(secret);
+                            t.doc.mark_clean();
+                            t.reset_text_undo();
+                            t.reparse(ts);
+                        }
+                        self.status = t().vim_password_ok.to_string();
+                    }
+                    Err(e) => self.dialog = Some(Dialog::Error(e)),
+                }
+            }
+        }
     }
 
     fn remember_file(&mut self, path: &Path) {
@@ -800,6 +904,15 @@ impl App {
             MenuCmd::SaveAs => {
                 let _ = self.save_active(true);
             }
+            MenuCmd::VimPassword => {
+                let active = self.win().active;
+                self.vim_ask = Some(VimAsk::Retype {
+                    win: self.cur,
+                    tab: active,
+                });
+                self.vim_pw.clear();
+                self.dialog = Some(Dialog::VimPassword);
+            }
             MenuCmd::Close => {
                 if !self.win().tabs.is_empty() {
                     let idx = self.win().active;
@@ -980,7 +1093,11 @@ impl App {
         let Some(tab) = win.active_tab_mut() else {
             return true;
         };
-        match file::write_text(&path, &tab.doc.text, tab.doc.newline, &tab.doc.enc) {
+        let write_res = match tab.doc.vim.clone() {
+            Some(sec) => file::write_vimcrypt(&path, &tab.doc.text, tab.doc.newline, &tab.doc.enc, &sec),
+            None => file::write_text(&path, &tab.doc.text, tab.doc.newline, &tab.doc.enc),
+        };
+        match write_res {
             Ok(()) => {
                 tab.doc.path = Some(path.clone());
                 tab.doc.mark_clean();
@@ -1344,6 +1461,13 @@ impl App {
                 }
                 if menu_item(ui, t().save_as, "Ctrl+Shift+S", can_save_as) {
                     cmd = Some(MenuCmd::SaveAs);
+                }
+                let has_vim = self
+                    .win()
+                    .active_tab()
+                    .is_some_and(|tb| tb.doc.vim.is_some());
+                if has_vim && menu_item(ui, t().vim_password, "", true) {
+                    cmd = Some(MenuCmd::VimPassword);
                 }
                 ui.separator();
                 if menu_item(ui, t().close, "Ctrl+W", has_tab) {
@@ -2974,6 +3098,48 @@ impl App {
                     self.dialog = None;
                 }
             }
+            Some(Dialog::VimPassword) => {
+                let mut submit = false;
+                let mut cancel = false;
+                egui::Window::new(t().vim_password)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(t().vim_password_prompt);
+                        ui.add_space(8.0);
+                        let resp = ui.add(
+                            egui::TextEdit::singleline(&mut self.vim_pw)
+                                .password(true)
+                                .desired_width(280.0),
+                        );
+                        resp.request_focus();
+                        if resp.lost_focus()
+                            && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                            && !self.vim_pw.is_empty()
+                        {
+                            submit = true;
+                        }
+                        ui.add_space(8.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(t().ok).clicked() {
+                                submit = true;
+                            }
+                            if ui.button(t().cancel).clicked() {
+                                cancel = true;
+                            }
+                        });
+                    });
+                if submit && !self.vim_pw.is_empty() {
+                    self.dialog = None;
+                    self.vim_submit();
+                }
+                if cancel {
+                    self.vim_ask = None;
+                    self.vim_pw.clear();
+                    self.dialog = None;
+                }
+            }
             Some(Dialog::CloseOthers(keep)) => {
                 let keep = *keep;
                 let mut action = 0;
@@ -3195,7 +3361,20 @@ impl App {
             return;
         };
         match file::kind_of(&path) {
-            Some(DocKind::Markdown) => match file::read_text(&path) {
+            Some(DocKind::Markdown) => {
+                let vim = self
+                    .wins
+                    .get(wi)
+                    .and_then(|w| w.tabs.get(ti))
+                    .and_then(|t| t.doc.vim.clone());
+                let res = match &vim {
+                    Some(sec) => file::read_bytes(&path).and_then(|b| {
+                        crate::io::vimcrypt::decrypt(&b, &sec.password)
+                            .map(|(p, _)| file::decode_bytes(&p))
+                    }),
+                    None => file::read_text(&path),
+                };
+                match res {
                 Ok((text, nl, enc)) => {
                     let ts = self.settings.md_tab_size;
                     let tab = &mut self.wins[wi].tabs[ti];
@@ -3208,7 +3387,8 @@ impl App {
                     self.status = i18n::reloaded(&file_label(&path));
                 }
                 Err(e) => self.status = e,
-            },
+                }
+            }
             Some(DocKind::Pdf) => {
                 self.wins[wi].tabs[ti].pdf = Some(view::pdf::PdfSession::open(&path));
                 self.status = i18n::reloaded(&file_label(&path));

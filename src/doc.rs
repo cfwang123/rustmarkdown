@@ -68,6 +68,8 @@ pub struct DocSession {
     pub saved_hash: u64,
     pub newline: Newline,
     pub enc: crate::io::file::TextEnc,
+    /// Vim 加密文件（blowfish2）的解密信息；非加密文件为 None。
+    pub vim: Option<crate::io::vimcrypt::VimSecret>,
 }
 
 impl DocSession {
@@ -80,6 +82,7 @@ impl DocSession {
             saved_hash,
             newline: Newline::default(),
             enc: crate::io::file::TextEnc::utf8(false),
+            vim: None,
         }
     }
 
@@ -97,6 +100,7 @@ impl DocSession {
             saved_hash,
             newline,
             enc,
+            vim: None,
         }
     }
 

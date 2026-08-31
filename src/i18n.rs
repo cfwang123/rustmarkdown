@@ -105,6 +105,11 @@ tr_def! {
     close_others: "关闭其它", "Close Others";
     close_others_confirm: "有未保存的更改。关闭其它标签？", "There are unsaved changes. Close other tabs?";
     closed_others: "已关闭其它标签", "Closed other tabs";
+    vim_password: "Vim密码", "Vim Password";
+    vim_password_prompt: "这是 Vim 加密文件（blowfish2），请输入密码：", "This file is Vim-encrypted (blowfish2). Enter its password:";
+    vim_unsupported_method: "不支持的 Vim 加密方式（仅支持 blowfish2 / VimCrypt~03!）", "Unsupported Vim encryption method (only blowfish2 / VimCrypt~03! is supported)";
+    vim_not_encrypted: "不是 Vim 加密文件", "Not a Vim-encrypted file";
+    vim_password_ok: "已用新密码重新解密", "Re-decrypted with the new password";
     reopen_tab: "重新打开关闭的标签", "Reopen Closed Tab";
     copy_file_path: "复制文件路径", "Copy File Path";
     reveal_in_explorer: "在资源管理器中显示", "Show in Explorer";

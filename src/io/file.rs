@@ -129,8 +129,12 @@ impl TextEnc {
     }
 }
 
+pub fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|e| crate::i18n::read_fail_path(path.display(), e))
+}
+
 pub fn read_text(path: &Path) -> Result<(String, Newline, TextEnc), String> {
-    let bytes = std::fs::read(path).map_err(|e| crate::i18n::read_fail_path(path.display(), e))?;
+    let bytes = read_bytes(path)?;
     Ok(decode_bytes(&bytes))
 }
 
@@ -222,16 +226,11 @@ fn encode_bytes(text: &str, enc: &TextEnc) -> Vec<u8> {
     out
 }
 
-pub fn write_text(path: &Path, text: &str, newline: Newline, enc: &TextEnc) -> Result<(), String> {
-    let body = match newline {
-        Newline::CrLf => text.replace('\n', "\r\n"),
-        Newline::Lf => text.to_string(),
-    };
-    let bytes = encode_bytes(&body, enc);
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, &bytes).map_err(|e| crate::i18n::write_tmp_fail(e))?;
+    std::fs::write(&tmp, bytes).map_err(|e| crate::i18n::write_tmp_fail(e))?;
     if cfg!(windows) && path.exists() {
         std::fs::remove_file(path).map_err(|e| crate::i18n::cannot_overwrite(e))?;
     }
@@ -239,6 +238,32 @@ pub fn write_text(path: &Path, text: &str, newline: Newline, enc: &TextEnc) -> R
         let _ = std::fs::remove_file(&tmp);
         crate::i18n::save_fail(e)
     })
+}
+
+pub fn write_text(path: &Path, text: &str, newline: Newline, enc: &TextEnc) -> Result<(), String> {
+    let body = match newline {
+        Newline::CrLf => text.replace('\n', "\r\n"),
+        Newline::Lf => text.to_string(),
+    };
+    let bytes = encode_bytes(&body, enc);
+    write_bytes_atomic(path, &bytes)
+}
+
+/// 写回 Vim 加密文件：编码后的明文以原 salt/seed 用 blowfish2 加密。
+pub fn write_vimcrypt(
+    path: &Path,
+    text: &str,
+    newline: Newline,
+    enc: &TextEnc,
+    secret: &crate::io::vimcrypt::VimSecret,
+) -> Result<(), String> {
+    let body = match newline {
+        Newline::CrLf => text.replace('\n', "\r\n"),
+        Newline::Lf => text.to_string(),
+    };
+    let bytes = encode_bytes(&body, enc);
+    let blob = crate::io::vimcrypt::encrypt(&bytes, secret);
+    write_bytes_atomic(path, &blob)
 }
 
 #[cfg(test)]
