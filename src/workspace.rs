@@ -1,11 +1,14 @@
 //! 文件夹工作区：懒加载目录树（VS Code 式资源管理器）。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-use egui::{pos2, vec2, Color32, CursorIcon, FontId, Rect, RichText, Sense, Ui};
+use egui::{pos2, vec2, Color32, CursorIcon, FontId, Rect, Sense, Ui};
 
 use crate::io::file;
+use crate::view::icons::{self, Icon};
+
+const HIST_CAP: usize = 32;
 
 #[derive(Clone, Debug)]
 pub struct FsEntry {
@@ -19,6 +22,9 @@ pub struct Workspace {
     expanded: HashSet<PathBuf>,
     children: HashMap<PathBuf, Vec<FsEntry>>,
     selected: Option<PathBuf>,
+    back: VecDeque<PathBuf>,
+    forward: VecDeque<PathBuf>,
+    path_edit: String,
 }
 
 pub enum ExplorerAction {
@@ -26,6 +32,8 @@ pub enum ExplorerAction {
     Reveal(PathBuf),
     CopyPath(PathBuf),
     Refresh,
+    RootChanged,
+    BadPath,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +50,9 @@ impl Workspace {
             expanded: HashSet::new(),
             children: HashMap::new(),
             selected: None,
+            back: VecDeque::new(),
+            forward: VecDeque::new(),
+            path_edit: abs_path_string(&root),
         };
         ws.expanded.insert(root.clone());
         ws.load(&root);
@@ -92,22 +103,128 @@ impl Workspace {
         }
         self.children.get(dir).map(|v| v.as_slice()).unwrap_or(&[])
     }
+
+    pub fn can_up(&self) -> bool {
+        parent_dir(&self.root).is_some()
+    }
+
+    pub fn can_back(&self) -> bool {
+        !self.back.is_empty()
+    }
+
+    pub fn can_forward(&self) -> bool {
+        !self.forward.is_empty()
+    }
+
+    pub fn go_up(&mut self) -> bool {
+        let Some(p) = parent_dir(&self.root) else {
+            return false;
+        };
+        self.navigate(p)
+    }
+
+    pub fn go_back(&mut self) -> bool {
+        let Some(prev) = self.back.pop_back() else {
+            return false;
+        };
+        self.forward.push_back(self.root.clone());
+        trim_hist(&mut self.forward);
+        self.apply_root(prev);
+        true
+    }
+
+    pub fn go_forward(&mut self) -> bool {
+        let Some(next) = self.forward.pop_back() else {
+            return false;
+        };
+        self.back.push_back(self.root.clone());
+        trim_hist(&mut self.back);
+        self.apply_root(next);
+        true
+    }
+
+    /// 切到新根目录并记入后退历史。同一路径则只同步路径框。
+    pub fn navigate(&mut self, dir: PathBuf) -> bool {
+        if !dir.is_dir() {
+            return false;
+        }
+        let dir = crate::doc::norm_path(&dir);
+        if dir == self.root {
+            self.path_edit = abs_path_string(&self.root);
+            return true;
+        }
+        self.back.push_back(self.root.clone());
+        trim_hist(&mut self.back);
+        self.forward.clear();
+        self.apply_root(dir);
+        true
+    }
+
+    fn apply_root(&mut self, dir: PathBuf) {
+        self.root = dir;
+        self.expanded.clear();
+        self.children.clear();
+        self.selected = None;
+        self.expanded.insert(self.root.clone());
+        self.load(&self.root.clone());
+        self.path_edit = abs_path_string(&self.root);
+    }
 }
 
 pub fn show(ui: &mut Ui, ws: &mut Workspace) -> Option<ExplorerAction> {
     let mut action = None;
     ui.style_mut().interaction.selectable_labels = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new(file_stem(&ws.root)).strong().size(13.0));
-        if ui.small_button("刷新").clicked() {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.add_enabled_ui(ws.can_up(), |ui| {
+            if icons::button(ui, Icon::Up, false, "上一级").clicked() {
+                if ws.go_up() {
+                    action = Some(ExplorerAction::RootChanged);
+                }
+            }
+        });
+        ui.add_enabled_ui(ws.can_back(), |ui| {
+            if icons::button(ui, Icon::Back, false, "后退").clicked() {
+                if ws.go_back() {
+                    action = Some(ExplorerAction::RootChanged);
+                }
+            }
+        });
+        ui.add_enabled_ui(ws.can_forward(), |ui| {
+            if icons::button(ui, Icon::Forward, false, "前进").clicked() {
+                if ws.go_forward() {
+                    action = Some(ExplorerAction::RootChanged);
+                }
+            }
+        });
+        if icons::button(ui, Icon::Refresh, false, "刷新").clicked() {
             action = Some(ExplorerAction::Refresh);
         }
     });
-    ui.label(
-        RichText::new(ws.root.display().to_string())
-            .small()
-            .color(Color32::from_gray(120)),
-    );
+    let path_id = ui.make_persistent_id("explorer_abs_path");
+    let focused = ui.memory(|m| m.has_focus(path_id));
+    if !focused {
+        let shown = abs_path_string(&ws.root);
+        if ws.path_edit != shown {
+            ws.path_edit = shown;
+        }
+    }
+    if focused && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ws.path_edit = abs_path_string(&ws.root);
+        ui.memory_mut(|m| m.surrender_focus(path_id));
+    }
+    let te = egui::TextEdit::singleline(&mut ws.path_edit)
+        .id(path_id)
+        .desired_width(ui.available_width())
+        .font(FontId::proportional(12.0))
+        .hint_text("绝对路径");
+    let resp = ui.add(te);
+    if resp.lost_focus() {
+        if let Some(a) = commit_path_edit(ws) {
+            action = Some(a);
+        }
+    }
+    ui.add_space(2.0);
     ui.separator();
     egui::ScrollArea::both()
         .id_salt("explorer_tree")
@@ -279,10 +396,71 @@ fn tree_row(
     }
 }
 
-fn file_stem(p: &Path) -> String {
-    p.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| p.display().to_string())
+fn parent_dir(p: &Path) -> Option<PathBuf> {
+    let parent = p.parent()?;
+    if parent.as_os_str().is_empty() {
+        return None;
+    }
+    if !parent.is_dir() {
+        return None;
+    }
+    Some(parent.to_path_buf())
+}
+
+fn abs_path_string(p: &Path) -> String {
+    let s = p.display().to_string();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if let Some(unc) = rest.strip_prefix("UNC\\") {
+            format!(r"\\{unc}")
+        } else {
+            rest.to_string()
+        }
+    } else {
+        s
+    }
+}
+
+fn trim_hist(h: &mut VecDeque<PathBuf>) {
+    while h.len() > HIST_CAP {
+        h.pop_front();
+    }
+}
+
+fn parse_dir_input(s: &str) -> Option<PathBuf> {
+    let t = s.trim().trim_matches('"');
+    if t.is_empty() {
+        return None;
+    }
+    let p = crate::io::shell_link::resolve(&PathBuf::from(t));
+    if p.is_dir() {
+        Some(p)
+    } else if p.is_file() {
+        parent_dir(&p)
+    } else {
+        None
+    }
+}
+
+fn commit_path_edit(ws: &mut Workspace) -> Option<ExplorerAction> {
+    let shown = abs_path_string(&ws.root);
+    if ws.path_edit.trim() == shown {
+        ws.path_edit = shown;
+        return None;
+    }
+    match parse_dir_input(&ws.path_edit) {
+        Some(dir) => {
+            if ws.navigate(dir) {
+                Some(ExplorerAction::RootChanged)
+            } else {
+                ws.path_edit = shown;
+                Some(ExplorerAction::BadPath)
+            }
+        }
+        None => {
+            ws.path_edit = shown;
+            Some(ExplorerAction::BadPath)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -302,5 +480,53 @@ mod tests {
         let _ = std::fs::remove_file(dir.join("a.md"));
         let _ = std::fs::remove_file(dir.join(".hidden"));
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn navigate_back_forward_up() {
+        let base = std::env::temp_dir().join("rustmarkdown-ws-nav");
+        let child = base.join("sub");
+        let _ = std::fs::create_dir_all(&child);
+        let mut ws = Workspace::new(child.clone());
+        assert!(ws.can_up());
+        assert!(!ws.can_back());
+        assert!(ws.go_up());
+        assert!(ws.can_back());
+        assert!(!ws.can_forward());
+        assert_eq!(ws.root, crate::doc::norm_path(&base));
+        assert!(ws.go_back());
+        assert_eq!(ws.root, crate::doc::norm_path(&child));
+        assert!(ws.can_forward());
+        assert!(ws.go_forward());
+        assert_eq!(ws.root, crate::doc::norm_path(&base));
+        let _ = std::fs::remove_dir(&child);
+        let _ = std::fs::remove_dir(&base);
+    }
+
+    #[test]
+    fn parse_dir_and_file() {
+        let dir = std::env::temp_dir().join("rustmarkdown-ws-path");
+        let _ = std::fs::create_dir_all(&dir);
+        let f = dir.join("a.md");
+        let _ = std::fs::write(&f, "x");
+        let got = parse_dir_input(&dir.display().to_string()).unwrap();
+        assert!(got.is_dir());
+        let from_file = parse_dir_input(&f.display().to_string()).unwrap();
+        assert_eq!(
+            crate::doc::norm_path(&from_file),
+            crate::doc::norm_path(&dir)
+        );
+        assert!(parse_dir_input("\"not-a-real-path-xyz\"").is_none());
+        let _ = std::fs::remove_file(&f);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn abs_path_strips_verbatim() {
+        assert_eq!(abs_path_string(Path::new(r"\\?\C:\docs")), r"C:\docs");
+        assert_eq!(
+            abs_path_string(Path::new(r"\\?\UNC\server\share")),
+            r"\\server\share"
+        );
     }
 }

@@ -449,9 +449,12 @@ impl App {
         if !dir.is_dir() {
             return Err(format!("不是文件夹：{}", dir.display()));
         }
-        let ws = Workspace::new(dir.to_path_buf());
         let win = self.win_mut();
-        win.workspace = Some(ws);
+        if let Some(ws) = win.workspace.as_mut() {
+            ws.navigate(dir.to_path_buf());
+        } else {
+            win.workspace = Some(Workspace::new(dir.to_path_buf()));
+        }
         win.sidebar_open = true;
         win.sidebar_tab = SidebarTab::Explorer;
         self.persist_sidebar();
@@ -1926,6 +1929,14 @@ impl App {
                 if let Some(ws) = self.win_mut().workspace.as_mut() {
                     ws.refresh();
                 }
+            }
+            Some(ExplorerAction::RootChanged) => {
+                if let Some(ws) = self.win().workspace.as_ref() {
+                    self.status = format!("已打开文件夹 {}", file_label(&ws.root));
+                }
+            }
+            Some(ExplorerAction::BadPath) => {
+                self.status = "路径无效或不是文件夹".to_string();
             }
             None => {}
         }

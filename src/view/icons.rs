@@ -16,6 +16,8 @@ pub enum Icon {
     Preview,
     Settings,
     Toc,
+    Up,
+    Refresh,
 }
 
 pub fn button(ui: &mut Ui, icon: Icon, selected: bool, tip: &str) -> Response {
@@ -55,6 +57,8 @@ fn paint(p: &Painter, icon: Icon, r: Rect, color: Color32) {
         Icon::Preview => paint_preview(p, r, s),
         Icon::Settings => paint_settings(p, r, s),
         Icon::Toc => paint_toc(p, r, s),
+        Icon::Up => paint_up(p, r, s),
+        Icon::Refresh => paint_refresh(p, r, s),
     }
 }
 
@@ -205,4 +209,33 @@ fn paint_toc(p: &Painter, r: Rect, s: Stroke) {
     p.line_segment([pos2(l + 3.0, y0 + 4.5), pos2(rt - 1.0, y0 + 4.5)], s);
     p.line_segment([pos2(l + 3.0, y0 + 9.0), pos2(rt - 2.5, y0 + 9.0)], s);
     p.line_segment([pos2(l, y0 + 13.5), pos2(rt - 1.0, y0 + 13.5)], s);
+}
+
+fn paint_up(p: &Painter, r: Rect, s: Stroke) {
+    let c = r.center();
+    let tip = pos2(c.x, r.top() + 2.5);
+    p.line_segment([pos2(c.x, r.bottom() - 2.5), tip], s);
+    p.line_segment([pos2(r.left() + 3.0, c.y + 0.5), tip], s);
+    p.line_segment([pos2(r.right() - 3.0, c.y + 0.5), tip], s);
+}
+
+fn paint_refresh(p: &Painter, r: Rect, s: Stroke) {
+    let c = r.center();
+    let rad = 5.2;
+    let col = s.color;
+    let sw = s.width;
+    for i in 3..21 {
+        let a0 = (i as f32) * std::f32::consts::TAU / 24.0 - 0.4;
+        let a1 = ((i + 1) as f32) * std::f32::consts::TAU / 24.0 - 0.4;
+        p.line_segment(
+            [
+                c + vec2(a0.cos(), a0.sin()) * rad,
+                c + vec2(a1.cos(), a1.sin()) * rad,
+            ],
+            Stroke::new(sw, col),
+        );
+    }
+    let tip = c + vec2(0.35_f32.cos(), 0.35_f32.sin()) * rad;
+    p.line_segment([tip, tip + vec2(3.2, -1.2)], s);
+    p.line_segment([tip, tip + vec2(-0.4, -3.4)], s);
 }
