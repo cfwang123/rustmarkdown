@@ -328,8 +328,8 @@ struct UndoSplit {
     last_change: f64,
 }
 
-/// 光标换到其它行（点击 / 方向键）时结束当前撤销合并；同一行连续输入仍合并。
-/// 回车改文本不算「移动光标」，仍与上一串输入合并。
+/// 光标换到其它行时结束当前撤销合并（点击 / 方向键 / 回车）。
+/// 同一行连续输入仍合并。
 fn undo_split_tick(
     st: &mut UndoSplit,
     line: usize,
@@ -340,14 +340,15 @@ fn undo_split_tick(
     let mut commit = false;
     if undo_redo {
         st.uncommitted = false;
-    } else if text_changed {
-        st.uncommitted = true;
-        st.last_change = now;
-    } else if st.uncommitted {
-        if line != st.line {
+    } else {
+        if line != st.line && (st.uncommitted || text_changed) {
             commit = true;
             st.uncommitted = false;
-        } else if now - st.last_change >= UNDO_STABLE_SECS {
+        }
+        if text_changed {
+            st.uncommitted = true;
+            st.last_change = now;
+        } else if st.uncommitted && now - st.last_change >= UNDO_STABLE_SECS {
             st.uncommitted = false;
         }
     }
@@ -481,11 +482,14 @@ mod tests {
     }
 
     #[test]
-    fn undo_enter_stays_merged() {
+    fn undo_enter_splits_each_line() {
         let mut st = split_st(0);
         assert!(!undo_split_tick(&mut st, 0, true, false, 0.1));
-        assert!(!undo_split_tick(&mut st, 1, true, false, 0.2));
+        assert!(undo_split_tick(&mut st, 1, true, false, 0.2));
         assert!(st.uncommitted);
+        assert!(!undo_split_tick(&mut st, 1, true, false, 0.3));
+        assert!(undo_split_tick(&mut st, 2, true, false, 0.4));
+        assert!(!undo_split_tick(&mut st, 2, true, false, 0.5));
     }
 
     #[test]
