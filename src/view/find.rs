@@ -135,10 +135,10 @@ fn search_chars(text: &str, query: &str) -> Vec<FindHit> {
 pub fn show_bar(ui: &mut Ui, st: &mut FindState) -> Option<FindBarEvent> {
     let mut ev = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("查找").strong());
+        ui.label(RichText::new(crate::i18n::t().find).strong());
         let edit = egui::TextEdit::singleline(&mut st.query)
             .desired_width(220.0)
-            .hint_text("文本");
+            .hint_text(crate::i18n::t().find_hint);
         let r = ui.add(edit);
         if st.focus {
             r.request_focus();
@@ -155,16 +155,16 @@ pub fn show_bar(ui: &mut Ui, st: &mut FindState) -> Option<FindBarEvent> {
             if st.query.trim().is_empty() {
                 " ".to_string()
             } else {
-                "无匹配".to_string()
+                crate::i18n::t().no_match.to_string()
             }
         } else {
             format!("{}/{}", st.cur + 1, n)
         };
         ui.label(RichText::new(label).color(Color32::from_gray(90)).monospace());
-        if ui.button("上一个").clicked() {
+        if ui.button(crate::i18n::t().find_prev).clicked() {
             ev = Some(FindBarEvent::Prev);
         }
-        if ui.button("下一个").clicked() {
+        if ui.button(crate::i18n::t().find_next).clicked() {
             ev = Some(FindBarEvent::Next);
         }
         if ui.button("×").clicked() {

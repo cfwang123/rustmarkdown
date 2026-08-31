@@ -262,7 +262,7 @@ pub fn show(
                     if doc.blocks.is_empty()
                         || doc.blocks.iter().all(|b| b.kind == MdBlockKind::Blank)
                     {
-                        ui.label(RichText::new("(空文档)").color(c(0x4B, 0x55, 0x63)));
+                        ui.label(RichText::new(crate::i18n::t().empty_doc).color(c(0x4B, 0x55, 0x63)));
                         return;
                     }
                     let (dirty_lo, dirty_hi, wrap_changed) =
@@ -444,7 +444,7 @@ pub fn show_paged(
             }
             if doc.blocks.is_empty() {
                 ui.add_space(24.0);
-                ui.label(RichText::new("(空文档)").color(c(0x4B, 0x55, 0x63)));
+                ui.label(RichText::new(crate::i18n::t().empty_doc).color(c(0x4B, 0x55, 0x63)));
             }
         });
     st.offset_y = sa.state.offset.y;
@@ -870,7 +870,11 @@ fn show_heading(
                             st.collapsed_heads.insert(b.line0);
                         }
                     }
-                    r.on_hover_text(if collapsed { "展开" } else { "折叠" });
+                    r.on_hover_text(if collapsed {
+                        crate::i18n::t().expand
+                    } else {
+                        crate::i18n::t().collapse
+                    });
                 }
             },
         );
@@ -1042,7 +1046,7 @@ fn show_code(
                         .color(c(0x4B, 0x55, 0x63)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("复制").clicked() {
+                    if ui.small_button(crate::i18n::t().copy).clicked() {
                         ui.ctx().copy_text(b.text.clone());
                     }
                 });
@@ -1058,9 +1062,9 @@ fn show_code(
             if foldable {
                 let more = n_lines.saturating_sub(CODE_FOLD_LINES);
                 let txt = if expanded {
-                    "... <CR> collapse".to_string()
+                    crate::i18n::t().code_fold_collapse.to_string()
                 } else {
-                    format!("... {more} more · <CR> expand")
+                    crate::i18n::code_fold_more(more)
                 };
                 let (rect, resp) = ui.allocate_exact_size(
                     vec2(ui.available_width().max(8.0), 18.0),
@@ -1079,7 +1083,11 @@ fn show_code(
                     c(0x6B, 0x72, 0x80),
                 );
                 resp.on_hover_cursor(egui::CursorIcon::PointingHand)
-                    .on_hover_text(if expanded { "收起" } else { "展开" });
+                    .on_hover_text(if expanded {
+                        crate::i18n::t().collapse_code
+                    } else {
+                        crate::i18n::t().expand
+                    });
                 if clicked {
                     if expanded {
                         st.code_open.remove(&b.line0);
@@ -1114,7 +1122,7 @@ fn show_mermaid(
                         .color(c(0x4B, 0x55, 0x63)),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.small_button("复制").clicked() {
+                    if ui.small_button(crate::i18n::t().copy).clicked() {
                         ui.ctx().copy_text(b.text.clone());
                     }
                 });
@@ -1134,19 +1142,19 @@ fn show_mermaid(
                                 .sense(Sense::click()),
                         )
                         .on_hover_cursor(egui::CursorIcon::PointingHand)
-                        .on_hover_text("双击预览 · 右键复制");
+                        .on_hover_text(crate::i18n::t().dblclick_preview_copy);
                     push_thumb(events, &resp, raster, title);
                 }
                 MermaidReady::Loading => {
                     ui.label(
-                        RichText::new("正在渲染图表…")
+                        RichText::new(crate::i18n::t().rendering_chart)
                             .size(12.0)
                             .color(c(0x4B, 0x55, 0x63)),
                     );
                 }
                 MermaidReady::Failed(err) => {
                     ui.label(
-                        RichText::new(format!("图表渲染失败：{err}"))
+                        RichText::new(crate::i18n::mermaid_fail(err))
                             .size(12.0)
                             .color(c(0xB9, 0x1C, 0x1C)),
                     );
@@ -2029,7 +2037,7 @@ fn show_image(
         let title = if cap.is_empty() {
             href.rsplit(['/', '\\'])
                 .next()
-                .unwrap_or("图片")
+                .unwrap_or(crate::i18n::t().image)
                 .to_string()
         } else {
             cap.to_string()
@@ -2037,7 +2045,7 @@ fn show_image(
         let resp = ui
             .add(egui::Image::new((raster.tex.id(), Vec2::new(w, h))).sense(Sense::click()))
             .on_hover_cursor(egui::CursorIcon::PointingHand)
-            .on_hover_text("双击预览 · 右键复制");
+            .on_hover_text(crate::i18n::t().dblclick_preview_copy);
         push_thumb(events, &resp, raster, title);
         if !cap.is_empty() {
             ui.label(RichText::new(cap).size(12.0).color(c(0x4B, 0x55, 0x63)));

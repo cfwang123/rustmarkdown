@@ -90,13 +90,13 @@ pub fn show(
                             .and_then(|p| p.parent())
                             .is_some_and(|d| !d.as_os_str().is_empty());
                         if ui
-                            .add_enabled(has_dir, egui::Button::new("打开为工作目录"))
+                            .add_enabled(has_dir, egui::Button::new(crate::i18n::t().open_as_workspace))
                             .clicked()
                         {
                             event = Some(TabBarEvent::OpenAsWorkspace(i));
                             ui.close();
                         }
-                        if ui.button("移到新窗口").clicked() {
+                        if ui.button(crate::i18n::t().move_to_new_window).clicked() {
                             event = Some(TabBarEvent::TearOff(i));
                             ui.close();
                         }
@@ -137,7 +137,7 @@ fn tab_chip(ui: &mut egui::Ui, tab: &Tab, selected: bool, dim: bool) -> egui::Re
     }
     response.on_hover_text(match &tab.doc.path {
         Some(p) => p.display().to_string(),
-        None => "未保存".to_string(),
+        None => crate::i18n::t().unsaved.to_string(),
     })
 }
 

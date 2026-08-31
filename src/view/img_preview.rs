@@ -120,11 +120,11 @@ pub fn show(ctx: &Context, st: &mut ImgPreview) -> Option<OverlayAction> {
 
             if let Some(img_id) = &img_id {
                 img_id.context_menu(|ui| {
-                    if ui.button("复制图片").clicked() {
+                    if ui.button(crate::i18n::t().copy_image).clicked() {
                         action = Some(OverlayAction::CopyImage);
                         ui.close();
                     }
-                    if ui.button("复制为文件").clicked() {
+                    if ui.button(crate::i18n::t().copy_as_file).clicked() {
                         action = Some(OverlayAction::CopyAsFile);
                         ui.close();
                     }
@@ -135,7 +135,7 @@ pub fn show(ctx: &Context, st: &mut ImgPreview) -> Option<OverlayAction> {
             ui.painter().rect_filled(bot, 0.0, chrome);
 
             ui.scope_builder(egui::UiBuilder::new().max_rect(close_r), |ui| {
-                let tip = format!("关闭 (Esc) · {}", st.title);
+                let tip = crate::i18n::close_esc(&st.title);
                 if close_btn(ui, &tip).clicked() {
                     close = true;
                 }
@@ -147,7 +147,7 @@ pub fn show(ctx: &Context, st: &mut ImgPreview) -> Option<OverlayAction> {
                     Layout::left_to_right(Align::Center),
                     |ui| {
                         ui.add_space(8.0);
-                        if ui.button("－").on_hover_text("缩小").clicked() {
+                        if ui.button("－").on_hover_text(crate::i18n::t().zoom_out).clicked() {
                             st.zoom = (st.zoom / WHEEL).clamp(MIN_ZOOM, MAX_ZOOM);
                         }
                         ui.label(
@@ -155,20 +155,20 @@ pub fn show(ctx: &Context, st: &mut ImgPreview) -> Option<OverlayAction> {
                                 .color(Color32::from_rgb(0xD1, 0xD5, 0xDB))
                                 .size(12.0),
                         );
-                        if ui.button("＋").on_hover_text("放大").clicked() {
+                        if ui.button("＋").on_hover_text(crate::i18n::t().zoom_in).clicked() {
                             st.zoom = (st.zoom * WHEEL).clamp(MIN_ZOOM, MAX_ZOOM);
                         }
-                        if ui.button("适合").on_hover_text("适合区域").clicked() {
+                        if ui.button(crate::i18n::t().fit).on_hover_text(crate::i18n::t().fit_area).clicked() {
                             st.fitted = false;
                         }
-                        if ui.button("1:1").on_hover_text("原始大小").clicked() {
+                        if ui.button("1:1").on_hover_text(crate::i18n::t().original_size).clicked() {
                             st.zoom = 1.0;
                             st.pan = Vec2::ZERO;
                         }
-                        if ui.button("复制图片").on_hover_text("Ctrl+C").clicked() {
+                        if ui.button(crate::i18n::t().copy_image).on_hover_text("Ctrl+C").clicked() {
                             action = Some(OverlayAction::CopyImage);
                         }
-                        if ui.button("复制为文件").clicked() {
+                        if ui.button(crate::i18n::t().copy_as_file).clicked() {
                             action = Some(OverlayAction::CopyAsFile);
                         }
                     },
@@ -222,11 +222,11 @@ pub fn interact_thumb(resp: &egui::Response) -> ThumbAction {
         act = ThumbAction::Preview;
     }
     resp.context_menu(|ui| {
-        if ui.button("复制图片").clicked() {
+        if ui.button(crate::i18n::t().copy_image).clicked() {
             act = ThumbAction::CopyImage;
             ui.close();
         }
-        if ui.button("复制为文件").clicked() {
+        if ui.button(crate::i18n::t().copy_as_file).clicked() {
             act = ThumbAction::CopyFile;
             ui.close();
         }

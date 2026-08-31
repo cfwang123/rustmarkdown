@@ -15,7 +15,7 @@ pub fn copy_image(raster: &Raster) -> Result<(), String> {
     let w = raster.size.x.round() as usize;
     let h = raster.size.y.round() as usize;
     if w == 0 || h == 0 || raster.rgba.len() < w * h * 4 {
-        return Err("没有可用的图片数据".into());
+        return Err(crate::i18n::t().no_image_data.into());
     }
     let mut cb = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     cb.set_image(arboard::ImageData {
@@ -31,7 +31,7 @@ pub fn save_image(raster: &Raster, path: &Path) -> Result<(), String> {
     let w = raster.size.x.round() as u32;
     let h = raster.size.y.round() as u32;
     let img = image::RgbaImage::from_raw(w, h, raster.rgba.as_ref().clone())
-        .ok_or_else(|| "无法编码图片".to_string())?;
+        .ok_or_else(|| crate::i18n::t().cannot_encode_image.to_string())?;
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -40,13 +40,13 @@ pub fn save_image(raster: &Raster, path: &Path) -> Result<(), String> {
     match ext.as_str() {
         "jpg" | "jpeg" => {
             let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
-            rgb.save(path).map_err(|e| format!("保存失败：{e}"))
+            rgb.save(path).map_err(|e| crate::i18n::save_fail(e))
         }
         "bmp" => {
             let rgb = image::DynamicImage::ImageRgba8(img).to_rgb8();
-            rgb.save(path).map_err(|e| format!("保存失败：{e}"))
+            rgb.save(path).map_err(|e| crate::i18n::save_fail(e))
         }
-        _ => img.save(path).map_err(|e| format!("保存失败：{e}")),
+        _ => img.save(path).map_err(|e| crate::i18n::save_fail(e)),
     }
 }
 
@@ -69,7 +69,7 @@ fn write_temp_png(raster: &Raster) -> Result<PathBuf, String> {
     let w = raster.size.x.round() as u32;
     let h = raster.size.y.round() as u32;
     let img = image::RgbaImage::from_raw(w, h, raster.rgba.as_ref().clone())
-        .ok_or_else(|| "无法编码图片".to_string())?;
+        .ok_or_else(|| crate::i18n::t().cannot_encode_image.to_string())?;
     let dir = std::env::temp_dir().join("rustmarkdown");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let name = raster

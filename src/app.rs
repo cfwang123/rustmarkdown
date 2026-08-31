@@ -5,6 +5,7 @@ use eframe::egui::{self, Key, Modifiers, ViewportBuilder, ViewportCommand, Viewp
 use egui::{Align, Color32, Layout, RichText};
 
 use crate::doc::{DocKind, DocSession, Tab, ViewMode};
+use crate::i18n::{self, t, Lang};
 use crate::io::file;
 use crate::io::watch::WatchHub;
 use crate::nav::{NavHist, NavPoint};
@@ -96,6 +97,7 @@ enum MenuCmd {
     Find,
     OpenRecent(PathBuf),
     ClearRecent,
+    Lang(Lang),
 }
 
 pub struct ClosedTab {
@@ -240,7 +242,7 @@ impl App {
             cur: 0,
             next_tab_id: 1,
             dialog: None,
-            status: "就绪".to_string(),
+            status: String::new(),
             closed_stack: Vec::new(),
             drop_hint: false,
             imgcache: ImgCache::default(),
@@ -259,6 +261,8 @@ impl App {
             incoming: Some(incoming),
         };
         crate::io::single::attach_ui(&cc.egui_ctx);
+        i18n::set(app.settings.ui_lang);
+        app.status = t().ready.to_string();
         crate::io::log::set_enabled(app.settings.enable_logs);
         app.wins[0].sidebar_open = app.settings.side_panel_visible;
         app.wins[0].sidebar_width = app.settings.side_panel_width as f32;
@@ -405,7 +409,7 @@ impl App {
                 self.wins[wi].active = ti;
             }
         }
-        self.status = format!("已恢复上次打开的 {n} 个文件");
+        self.status = i18n::restored(n);
     }
 
     fn persist_session(&mut self) {
@@ -441,13 +445,13 @@ impl App {
         } else if file::kind_of(&resolved).is_some() || resolved.is_file() {
             self.open_path(0, &resolved)
         } else {
-            Err(format!("路径不存在：{}", resolved.display()))
+            Err(i18n::path_missing(resolved.display()))
         }
     }
 
     fn open_folder(&mut self, dir: &Path) -> Result<(), String> {
         if !dir.is_dir() {
-            return Err(format!("不是文件夹：{}", dir.display()));
+            return Err(i18n::not_folder(dir.display()));
         }
         let win = self.win_mut();
         if let Some(ws) = win.workspace.as_mut() {
@@ -458,17 +462,17 @@ impl App {
         win.sidebar_open = true;
         win.sidebar_tab = SidebarTab::Explorer;
         self.persist_sidebar();
-        self.status = format!("已打开文件夹 {}", file_label(dir));
+        self.status = i18n::opened_folder(&file_label(dir));
         Ok(())
     }
 
     fn open_tab_as_workspace(&mut self, idx: usize) {
         let Some(path) = self.win().tabs.get(idx).and_then(|t| t.doc.path.clone()) else {
-            self.status = "未保存的标签没有父目录".to_string();
+            self.status = t().untitled_no_parent.to_string();
             return;
         };
         let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) else {
-            self.status = "无法取得父目录".to_string();
+            self.status = t().no_parent.to_string();
             return;
         };
         if let Err(e) = self.open_folder(dir) {
@@ -482,11 +486,11 @@ impl App {
             self.cur = wi;
             self.wins[wi].active = ti;
             self.remember_file(&path);
-            self.status = format!("已切换到 {}", file_label(&path));
+            self.status = i18n::switched_to(&file_label(&path));
             return Ok(());
         }
         let kind = file::kind_of(&path)
-            .ok_or_else(|| format!("不支持的文件类型：{}", path.display()))?;
+            .ok_or_else(|| i18n::unsupported_type(path.display()))?;
         let id = self.alloc_id();
         let tab_size = self.settings.md_tab_size;
         let tab = match kind {
@@ -560,7 +564,7 @@ impl App {
         }
         self.sync_watch();
         self.remember_file(&path);
-        self.status = format!("已打开 {}", file_label(&path));
+        self.status = i18n::opened(&file_label(&path));
         Ok(())
     }
 
@@ -578,10 +582,7 @@ impl App {
                 .recent_files
                 .retain(|p| crate::doc::norm_path(p) != crate::doc::norm_path(&path));
             self.settings.save();
-            self.dialog = Some(Dialog::Error(format!(
-                "文件不存在：{}",
-                file_label(&path)
-            )));
+            self.dialog = Some(Dialog::Error(i18n::file_missing_named(&file_label(&path))));
             return;
         }
         if let Err(e) = self.open_incoming(&path) {
@@ -600,7 +601,7 @@ impl App {
         let win = self.win_mut();
         win.tabs.push(tab);
         win.active = win.tabs.len() - 1;
-        self.status = "新建未命名文档".to_string();
+        self.status = t().new_untitled.to_string();
     }
 
     fn push_closed(&mut self, tab: Tab) {
@@ -620,7 +621,7 @@ impl App {
 
     fn reopen_closed(&mut self) {
         let Some(c) = self.closed_stack.pop() else {
-            self.status = "没有可重开的标签".to_string();
+            self.status = t().no_reopen.to_string();
             return;
         };
         if let Some(path) = &c.path {
@@ -649,7 +650,7 @@ impl App {
         let win = self.win_mut();
         win.tabs.push(tab);
         win.active = win.tabs.len() - 1;
-        self.status = "已重开标签".to_string();
+        self.status = t().reopened_tab.to_string();
     }
 
     fn request_close_tab(&mut self, idx: usize) {
@@ -682,7 +683,7 @@ impl App {
         if self.cur != 0 && self.win().tabs.is_empty() {
             self.win_mut().pending_close = true;
         }
-        self.status = "已关闭标签".to_string();
+        self.status = t().closed_tab.to_string();
     }
 
     fn close_all_tabs(&mut self) {
@@ -699,7 +700,7 @@ impl App {
             self.dialog = Some(Dialog::CloseAll);
         } else {
             self.close_all_tabs();
-            self.status = "已关闭全部标签".to_string();
+            self.status = t().closed_all.to_string();
         }
     }
 
@@ -708,12 +709,12 @@ impl App {
             return;
         };
         let Some(path) = &tab.doc.path else {
-            self.status = "当前文档尚未保存到文件".to_string();
+            self.status = t().doc_not_saved.to_string();
             return;
         };
         match crate::io::clipboard::copy_text(&path.display().to_string()) {
-            Ok(()) => self.status = "已复制文件路径".to_string(),
-            Err(e) => self.status = format!("复制路径失败：{e}"),
+            Ok(()) => self.status = t().copied_path.to_string(),
+            Err(e) => self.status = i18n::copy_path_fail(e),
         }
     }
 
@@ -722,11 +723,11 @@ impl App {
             return;
         };
         let Some(path) = tab.doc.path.clone() else {
-            self.status = "当前文档尚未保存到文件".to_string();
+            self.status = t().doc_not_saved.to_string();
             return;
         };
         if !path.exists() {
-            self.status = "文件不存在".to_string();
+            self.status = t().file_missing.to_string();
             return;
         }
         #[cfg(windows)]
@@ -737,14 +738,14 @@ impl App {
                 .spawn()
                 .is_err()
             {
-                self.status = "无法打开资源管理器".to_string();
+                self.status = t().cannot_open_explorer.to_string();
             }
         }
         #[cfg(not(windows))]
         {
             let dir = path.parent().unwrap_or(path.as_path());
             if opener::open(dir).is_err() {
-                self.status = "无法打开所在目录".to_string();
+                self.status = t().cannot_open_dir.to_string();
             }
         }
     }
@@ -791,8 +792,9 @@ impl App {
             MenuCmd::ClearRecent => {
                 self.settings.recent_files.clear();
                 self.settings.save();
-                self.status = "已清除历史文件".to_string();
+                self.status = t().cleared_recent.to_string();
             }
+            MenuCmd::Lang(lang) => self.apply_lang(lang),
         }
     }
 
@@ -842,13 +844,9 @@ impl App {
         }
         if let Some(line) = tab.find.current().map(|h| h.line) {
             tab.request_jump(line);
-            self.status = format!(
-                "查找 {}/{}",
-                tab.find.cur + 1,
-                tab.find.hits.len().max(1)
-            );
+            self.status = i18n::find_status(tab.find.cur + 1, tab.find.hits.len().max(1));
         } else if !tab.find.query.trim().is_empty() {
-            self.status = "无匹配".to_string();
+            self.status = t().no_match.to_string();
         }
     }
 
@@ -866,7 +864,7 @@ impl App {
     fn pick_open(&mut self) {
         let picked = rfd::FileDialog::new()
             .add_filter(
-                "文档",
+                t().filter_docs,
                 &[
                     "md", "markdown", "txt", "docx", "doc", "pdf", "lnk", "png", "jpg", "jpeg",
                     "gif", "bmp", "ico", "tif", "tiff", "webp",
@@ -876,11 +874,11 @@ impl App {
             .add_filter("Word", &["doc", "docx"])
             .add_filter("PDF", &["pdf"])
             .add_filter(
-                "图片",
+                t().filter_images,
                 &["png", "jpg", "jpeg", "gif", "bmp", "ico", "tif", "tiff", "webp"],
             )
-            .add_filter("快捷方式", &["lnk"])
-            .add_filter("所有文件", &["*"])
+            .add_filter(t().filter_shortcut, &["lnk"])
+            .add_filter(t().filter_all, &["*"])
             .pick_files();
         if let Some(paths) = picked {
             for p in paths {
@@ -905,18 +903,18 @@ impl App {
             return true;
         };
         if tab.kind == DocKind::Pdf {
-            self.status = "PDF 为只读预览，无法保存".to_string();
+            self.status = t().pdf_readonly_save.to_string();
             return false;
         }
         if tab.kind == DocKind::Image {
             if !save_as {
-                self.status = "图片为只读预览，请用「另存为」导出".to_string();
+                self.status = t().image_readonly_save.to_string();
                 return false;
             }
             return self.save_image_as();
         }
         if tab.kind == DocKind::Word && !save_as {
-            self.status = "Word 为只读预览，请用「另存为」导出 Markdown".to_string();
+            self.status = t().word_readonly_save.to_string();
             return false;
         }
         let need_dialog = save_as || tab.doc.path.is_none() || tab.kind != DocKind::Markdown;
@@ -930,7 +928,7 @@ impl App {
                     dlg = dlg.set_file_name(format!("{}.md", name.to_string_lossy()));
                 }
             } else {
-                dlg = dlg.set_file_name("未命名.md");
+                dlg = dlg.set_file_name(t().untitled_md);
             }
             match dlg.save_file() {
                 Some(p) => p,
@@ -954,7 +952,7 @@ impl App {
                 self.watch.ignore(&path);
                 self.sync_watch();
                 self.remember_file(&path);
-                self.status = format!("已保存 {}", file_label(&path));
+                self.status = i18n::saved(&file_label(&path));
                 true
             }
             Err(e) => {
@@ -988,7 +986,7 @@ impl App {
             }
         }
         if nfile > 0 {
-            self.status = format!("已在当前窗口打开 {nfile} 个文件");
+            self.status = i18n::opened_n_files(nfile);
         }
     }
 
@@ -1013,7 +1011,7 @@ impl App {
         let bytes = f
             .bytes
             .as_ref()
-            .ok_or_else(|| "无法读取拖入的文件（没有路径也没有内容）".to_string())?;
+            .ok_or_else(|| t().drop_no_content.to_string())?;
         let name = if f.name.is_empty() {
             "dropped.bin".to_string()
         } else {
@@ -1033,9 +1031,9 @@ impl App {
             })
             .collect();
         let dir = std::env::temp_dir().join("rustmarkdown-drop");
-        std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建临时目录：{e}"))?;
+        std::fs::create_dir_all(&dir).map_err(|e| i18n::tmp_dir_fail(e))?;
         let dest = dir.join(name);
-        std::fs::write(&dest, bytes.as_ref()).map_err(|e| format!("无法写入临时文件：{e}"))?;
+        std::fs::write(&dest, bytes.as_ref()).map_err(|e| i18n::tmp_write_fail(e))?;
         self.open_incoming(&dest)
     }
 
@@ -1204,6 +1202,7 @@ impl App {
         draft.normalize();
         self.settings = draft;
         self.settings.save();
+        i18n::set(self.settings.ui_lang);
         crate::io::log::set_enabled(self.settings.enable_logs);
         let ts = self.settings.md_tab_size;
         for win in &mut self.wins {
@@ -1211,7 +1210,16 @@ impl App {
                 tab.reparse(ts);
             }
         }
-        self.status = "已保存参数设置".to_string();
+        self.status = t().settings_saved.to_string();
+    }
+
+    fn apply_lang(&mut self, lang: Lang) {
+        self.settings.ui_lang = lang;
+        i18n::set(lang);
+        self.settings.save();
+        if let Some(d) = self.settings_draft.as_mut() {
+            d.ui_lang = lang;
+        }
     }
 
     fn preview_opts(&self) -> PreviewOpts {
@@ -1250,19 +1258,19 @@ impl App {
         let mut cmd = None;
 
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("文件", |ui| {
-                if menu_item(ui, "新建", "Ctrl+N", true) {
+            ui.menu_button(t().menu_file, |ui| {
+                if menu_item(ui, t().new, "Ctrl+N", true) {
                     cmd = Some(MenuCmd::New);
                 }
-                if menu_item(ui, "打开...", "Ctrl+O", true) {
+                if menu_item(ui, t().open_ellipsis, "Ctrl+O", true) {
                     cmd = Some(MenuCmd::Open);
                 }
-                if menu_item(ui, "打开文件夹...", "Ctrl+Shift+O", true) {
+                if menu_item(ui, t().open_folder_ellipsis, "Ctrl+Shift+O", true) {
                     cmd = Some(MenuCmd::OpenFolder);
                 }
-                ui.menu_button("历史文件", |ui| {
+                ui.menu_button(t().recent_files, |ui| {
                     if self.settings.recent_files.is_empty() {
-                        ui.label(RichText::new("（空）").weak());
+                        ui.label(RichText::new(t().recent_empty).weak());
                     } else {
                         let recents = self.settings.recent_files.clone();
                         for p in recents {
@@ -1286,57 +1294,57 @@ impl App {
                             }
                         }
                         ui.separator();
-                        if menu_item(ui, "清除历史", "", true) {
+                        if menu_item(ui, t().clear_recent, "", true) {
                             cmd = Some(MenuCmd::ClearRecent);
                         }
                     }
                 });
                 ui.separator();
-                if menu_item(ui, "保存", "Ctrl+S", can_save) {
+                if menu_item(ui, t().save, "Ctrl+S", can_save) {
                     cmd = Some(MenuCmd::Save);
                 }
-                if menu_item(ui, "另存为...", "Ctrl+Shift+S", can_save_as) {
+                if menu_item(ui, t().save_as, "Ctrl+Shift+S", can_save_as) {
                     cmd = Some(MenuCmd::SaveAs);
                 }
                 ui.separator();
-                if menu_item(ui, "关闭", "Ctrl+W", has_tab) {
+                if menu_item(ui, t().close, "Ctrl+W", has_tab) {
                     cmd = Some(MenuCmd::Close);
                 }
-                if menu_item(ui, "关闭全部", "", has_tab) {
+                if menu_item(ui, t().close_all, "", has_tab) {
                     cmd = Some(MenuCmd::CloseAll);
                 }
-                if menu_item(ui, "重新打开关闭的标签", "Ctrl+Shift+T", can_reopen) {
+                if menu_item(ui, t().reopen_tab, "Ctrl+Shift+T", can_reopen) {
                     cmd = Some(MenuCmd::Reopen);
                 }
                 ui.separator();
-                if menu_item(ui, "复制文件路径", "", has_path) {
+                if menu_item(ui, t().copy_file_path, "", has_path) {
                     cmd = Some(MenuCmd::CopyPath);
                 }
-                if menu_item(ui, "在资源管理器中显示", "", has_path) {
+                if menu_item(ui, t().reveal_in_explorer, "", has_path) {
                     cmd = Some(MenuCmd::Reveal);
                 }
                 ui.separator();
-                if menu_item(ui, "退出", "Alt+F4", true) {
+                if menu_item(ui, t().exit, "Alt+F4", true) {
                     cmd = Some(MenuCmd::Exit);
                 }
             });
-            ui.menu_button("查看", |ui| {
-                if menu_item(ui, "后退", "Alt+←", self.win().nav.can_back()) {
+            ui.menu_button(t().menu_view, |ui| {
+                if menu_item(ui, t().back, "Alt+←", self.win().nav.can_back()) {
                     cmd = Some(MenuCmd::NavBack);
                 }
-                if menu_item(ui, "前进", "Alt+→", self.win().nav.can_fwd()) {
+                if menu_item(ui, t().forward, "Alt+→", self.win().nav.can_fwd()) {
                     cmd = Some(MenuCmd::NavFwd);
                 }
-                if menu_item(ui, "查找", "Ctrl+F", has_tab) {
+                if menu_item(ui, t().find, "Ctrl+F", has_tab) {
                     cmd = Some(MenuCmd::Find);
                 }
                 ui.separator();
-                if menu_check(ui, "代码", "Ctrl+1", can_mode, cur == Some(ViewMode::Code)) {
+                if menu_check(ui, t().mode_code, "Ctrl+1", can_mode, cur == Some(ViewMode::Code)) {
                     cmd = Some(MenuCmd::Mode(ViewMode::Code));
                 }
                 if menu_check(
                     ui,
-                    "侧边预览",
+                    t().mode_side,
                     "Ctrl+2",
                     can_mode,
                     cur == Some(ViewMode::Side),
@@ -1345,7 +1353,7 @@ impl App {
                 }
                 if menu_check(
                     ui,
-                    "预览",
+                    t().mode_preview,
                     "Ctrl+3",
                     can_mode,
                     cur == Some(ViewMode::Preview),
@@ -1353,21 +1361,30 @@ impl App {
                     cmd = Some(MenuCmd::Mode(ViewMode::Preview));
                 }
                 ui.separator();
-                if menu_item(ui, "预览 / 编辑切换", "Ctrl+E", can_mode) {
+                if menu_item(ui, t().toggle_preview_edit, "Ctrl+E", can_mode) {
                     cmd = Some(MenuCmd::Toggle);
                 }
                 ui.separator();
-                if menu_check(ui, "目录侧栏", "F4", true, self.win().sidebar_open) {
+                if menu_check(ui, t().sidebar, "F4", true, self.win().sidebar_open) {
                     cmd = Some(MenuCmd::Sidebar);
                 }
+                ui.separator();
+                ui.menu_button(t().menu_language, |ui| {
+                    if menu_check(ui, t().lang_zh, "", true, i18n::get() == Lang::Zh) {
+                        cmd = Some(MenuCmd::Lang(Lang::Zh));
+                    }
+                    if menu_check(ui, t().lang_en, "", true, i18n::get() == Lang::En) {
+                        cmd = Some(MenuCmd::Lang(Lang::En));
+                    }
+                });
             });
-            ui.menu_button("工具", |ui| {
-                if menu_item(ui, "参数设置...", "Ctrl+,", true) {
+            ui.menu_button(t().menu_tools, |ui| {
+                if menu_item(ui, t().settings_ellipsis, "Ctrl+,", true) {
                     cmd = Some(MenuCmd::Settings);
                 }
             });
-            ui.menu_button("帮助", |ui| {
-                if menu_item(ui, "关于 rustmarkdown", "", true) {
+            ui.menu_button(t().menu_help, |ui| {
+                if menu_item(ui, t().about_app, "", true) {
                     cmd = Some(MenuCmd::About);
                 }
             });
@@ -1384,10 +1401,10 @@ impl App {
             Layout::left_to_right(Align::Center),
             |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                if view::icons::button(ui, Icon::New, false, "新建 (Ctrl+N)").clicked() {
+                if view::icons::button(ui, Icon::New, false, t().tip_new).clicked() {
                     self.new_untitled();
                 }
-                if view::icons::button(ui, Icon::Open, false, "打开 (Ctrl+O)").clicked() {
+                if view::icons::button(ui, Icon::Open, false, t().tip_open).clicked() {
                     self.pick_open();
                 }
                 let kind = self.win().active_tab().map(|t| t.kind);
@@ -1395,12 +1412,12 @@ impl App {
                 let can_save_as = kind.is_some() && kind != Some(DocKind::Pdf);
                 let can_mode = kind == Some(DocKind::Markdown);
                 ui.add_enabled_ui(can_save, |ui| {
-                    if view::icons::button(ui, Icon::Save, false, "保存 (Ctrl+S)").clicked() {
+                    if view::icons::button(ui, Icon::Save, false, t().tip_save).clicked() {
                         let _ = self.save_active(false);
                     }
                 });
                 ui.add_enabled_ui(can_save_as, |ui| {
-                    if view::icons::button(ui, Icon::SaveAs, false, "另存为 (Ctrl+Shift+S)")
+                    if view::icons::button(ui, Icon::SaveAs, false, t().tip_save_as)
                         .clicked()
                     {
                         let _ = self.save_active(true);
@@ -1414,12 +1431,12 @@ impl App {
                 let mut go_back = false;
                 let mut go_fwd = false;
                 ui.add_enabled_ui(can_back, |ui| {
-                    if view::icons::button(ui, Icon::Back, false, "后退 (Alt+←)").clicked() {
+                    if view::icons::button(ui, Icon::Back, false, t().tip_back).clicked() {
                         go_back = true;
                     }
                 });
                 ui.add_enabled_ui(can_fwd, |ui| {
-                    if view::icons::button(ui, Icon::Forward, false, "前进 (Alt+→)").clicked() {
+                    if view::icons::button(ui, Icon::Forward, false, t().tip_forward).clicked() {
                         go_fwd = true;
                     }
                 });
@@ -1435,7 +1452,7 @@ impl App {
                 let mut set_mode = None;
                 let cur = self.win().active_tab().map(|t| t.mode);
                 ui.add_enabled_ui(can_mode, |ui| {
-                    if view::icons::button(ui, Icon::Code, cur == Some(ViewMode::Code), "代码 (Ctrl+1)")
+                    if view::icons::button(ui, Icon::Code, cur == Some(ViewMode::Code), t().tip_code)
                         .clicked()
                     {
                         set_mode = Some(ViewMode::Code);
@@ -1444,7 +1461,7 @@ impl App {
                         ui,
                         Icon::Side,
                         cur == Some(ViewMode::Side),
-                        "侧边预览 (Ctrl+2)",
+                        t().tip_side,
                     )
                     .clicked()
                     {
@@ -1454,7 +1471,7 @@ impl App {
                         ui,
                         Icon::Preview,
                         cur == Some(ViewMode::Preview),
-                        "预览 (Ctrl+3)",
+                        t().tip_preview,
                     )
                     .clicked()
                     {
@@ -1463,7 +1480,7 @@ impl App {
                 });
                 ui.add_space(4.0);
                 let toc_on = self.win().sidebar_open;
-                if view::icons::button(ui, Icon::Toc, toc_on, "目录侧栏 (F4)").clicked() {
+                if view::icons::button(ui, Icon::Toc, toc_on, t().tip_sidebar).clicked() {
                     self.toggle_sidebar();
                 }
                 if let Some(m) = set_mode {
@@ -1474,7 +1491,7 @@ impl App {
                 ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(4.0);
-                if view::icons::button(ui, Icon::Settings, false, "参数设置 (Ctrl+,)").clicked()
+                if view::icons::button(ui, Icon::Settings, false, t().tip_settings).clicked()
                 {
                     self.open_settings();
                 }
@@ -1633,7 +1650,7 @@ impl App {
         w.tabs.push(tab);
         w.active = 0;
         self.wins.push(w);
-        self.status = "已移到新窗口".to_string();
+        self.status = t().moved_window.to_string();
     }
 
     fn over_tabstrip(w: &Win, p: egui::Pos2) -> bool {
@@ -1767,7 +1784,7 @@ impl App {
             d.floated = true;
             d.grab_in_win = grab;
         }
-        self.status = "已移到新窗口".to_string();
+        self.status = t().moved_window.to_string();
     }
 
     fn merge_dragged_tab(&mut self, target_wi: usize, insert: usize) {
@@ -1791,7 +1808,7 @@ impl App {
         if let Some(d) = self.tab_drag.as_mut() {
             d.floated = false;
         }
-        self.status = "已合并到窗口".to_string();
+        self.status = t().merged_window.to_string();
     }
 
     fn end_tab_drag(&mut self) {
@@ -1873,13 +1890,13 @@ impl App {
         ui.horizontal(|ui| {
             let cur = self.win().sidebar_tab;
             if ui
-                .selectable_label(cur == SidebarTab::Explorer, "资源管理器")
+                .selectable_label(cur == SidebarTab::Explorer, t().explorer)
                 .clicked()
             {
                 self.win_mut().sidebar_tab = SidebarTab::Explorer;
             }
             if ui
-                .selectable_label(cur == SidebarTab::Outline, "大纲")
+                .selectable_label(cur == SidebarTab::Outline, t().outline)
                 .clicked()
             {
                 self.win_mut().sidebar_tab = SidebarTab::Outline;
@@ -1896,12 +1913,12 @@ impl App {
         if self.win().workspace.is_none() {
             ui.add_space(8.0);
             ui.label(
-                RichText::new("未打开文件夹")
+                RichText::new(t().no_folder)
                     .size(12.0)
                     .color(Color32::from_rgb(0x88, 0x88, 0x88)),
             );
             ui.add_space(6.0);
-            if ui.button("打开文件夹…").clicked() {
+            if ui.button(t().open_folder_btn).clicked() {
                 self.pick_open_folder();
             }
             return;
@@ -1917,7 +1934,7 @@ impl App {
                         self.dialog = Some(Dialog::Error(e));
                     }
                 } else if let Err(_) = opener::open(&p) {
-                    self.status = format!("无法打开：{}", file_label(&p));
+                    self.status = i18n::cannot_open(&file_label(&p));
                 }
             }
             Some(ExplorerAction::Reveal(p)) => {
@@ -1925,7 +1942,7 @@ impl App {
             }
             Some(ExplorerAction::CopyPath(p)) => {
                 match crate::io::clipboard::copy_text(&p.display().to_string()) {
-                    Ok(()) => self.status = "已复制路径".to_string(),
+                    Ok(()) => self.status = t().copied_path_ok.to_string(),
                     Err(e) => self.status = e,
                 }
             }
@@ -1936,11 +1953,11 @@ impl App {
             }
             Some(ExplorerAction::RootChanged) => {
                 if let Some(ws) = self.win().workspace.as_ref() {
-                    self.status = format!("已打开文件夹 {}", file_label(&ws.root));
+                    self.status = i18n::opened_folder(&file_label(&ws.root));
                 }
             }
             Some(ExplorerAction::BadPath) => {
-                self.status = "路径无效或不是文件夹".to_string();
+                self.status = t().bad_folder_path.to_string();
             }
             None => {}
         }
@@ -1952,7 +1969,7 @@ impl App {
             let arg = format!("/select,{}", path.display());
             if std::process::Command::new("explorer").arg(&arg).spawn().is_err()
             {
-                self.status = "无法打开资源管理器".to_string();
+                self.status = t().cannot_open_explorer.to_string();
             }
         }
         #[cfg(not(windows))]
@@ -2011,7 +2028,7 @@ impl App {
                 );
                 ui.add_space(8.0);
                 ui.label(
-                    RichText::new("当前文档无章节")
+                    RichText::new(t().no_headings)
                         .size(12.0)
                         .color(Color32::from_rgb(0x88, 0x88, 0x88)),
                 );
@@ -2201,7 +2218,7 @@ impl App {
             view::pdf::PdfAction::CopyText(t) => {
                 ui.ctx().copy_text(t.clone());
                 let n = t.chars().filter(|c| !c.is_control()).count();
-                self.status = format!("已复制 {n} 字");
+                self.status = i18n::copied_n_chars(n);
             }
         }
     }
@@ -2241,7 +2258,7 @@ impl App {
                 return false;
             };
             let Some(raster) = tab.image.as_ref().and_then(|i| i.raster.clone()) else {
-                self.status = "图片尚未加载完成".to_string();
+                self.status = t().image_not_ready.to_string();
                 return false;
             };
             let stem = tab
@@ -2270,7 +2287,7 @@ impl App {
         }
         match crate::io::clipboard::save_image(&raster, &path) {
             Ok(()) => {
-                self.status = format!("图片已另存 {}", file_label(&path));
+                self.status = i18n::image_saved(&file_label(&path));
                 true
             }
             Err(e) => {
@@ -2342,15 +2359,15 @@ impl App {
 
     fn copy_image(&mut self, raster: &crate::io::imgcache::Raster) {
         match crate::io::clipboard::copy_image(raster) {
-            Ok(()) => self.status = "已复制图片".to_string(),
-            Err(e) => self.status = format!("复制图片失败：{e}"),
+            Ok(()) => self.status = t().copied_image.to_string(),
+            Err(e) => self.status = i18n::copy_image_fail(e),
         }
     }
 
     fn copy_image_file(&mut self, raster: &crate::io::imgcache::Raster) {
         match crate::io::clipboard::copy_as_file(raster) {
-            Ok(p) => self.status = format!("已复制为文件：{}", p.display()),
-            Err(e) => self.status = format!("复制为文件失败：{e}"),
+            Ok(p) => self.status = i18n::copied_as_file(p.display()),
+            Err(e) => self.status = i18n::copy_as_file_fail(e),
         }
     }
 
@@ -2415,7 +2432,7 @@ impl App {
         }
         href.rsplit(['/', '\\'])
             .next()
-            .unwrap_or("图片")
+            .unwrap_or(t().image)
             .to_string()
     }
 
@@ -2427,7 +2444,7 @@ impl App {
         let base = self.win().active_tab().and_then(|t| t.doc.path.clone());
         let title = Self::img_title(alt, href);
         if self.imgcache.is_failed(href, base.as_deref()) {
-            self.status = format!("无法加载图片：{href}");
+            self.status = i18n::cannot_load_image(href);
             return;
         }
         if let Some(raster) = self.imgcache.get(ctx, href, base.as_deref()) {
@@ -2440,7 +2457,7 @@ impl App {
             title,
             base,
         });
-        self.status = "正在加载图片…".to_string();
+        self.status = t().loading_image.to_string();
         ctx.request_repaint();
     }
 
@@ -2454,7 +2471,7 @@ impl App {
         let base = p.base.clone();
         if self.imgcache.is_failed(&href, base.as_deref()) {
             self.pending_img = None;
-            self.status = format!("无法加载图片：{href}");
+            self.status = i18n::cannot_load_image(href);
             return;
         }
         if let Some(raster) = self.imgcache.get(ctx, &href, base.as_deref()) {
@@ -2470,7 +2487,7 @@ impl App {
         }
         if href.starts_with("http://") || href.starts_with("https://") {
             if opener::open(href).is_err() {
-                self.status = format!("无法打开链接：{href}");
+                self.status = i18n::cannot_open_link(href);
             }
             return;
         }
@@ -2523,7 +2540,7 @@ impl App {
             return;
         }
         if opener::open(&resolved).is_err() {
-            self.status = format!("无法打开：{}", path.display());
+            self.status = i18n::cannot_open(path.display());
         }
     }
 
@@ -2561,7 +2578,7 @@ impl App {
             match crate::parser::heading_line_for_anchor(&tab.md, frag) {
                 Some(l) => l,
                 None => {
-                    self.status = format!("未找到锚点：#{frag}");
+                    self.status = i18n::anchor_missing(frag);
                     return;
                 }
             }
@@ -2606,12 +2623,12 @@ impl App {
                     }
                 }
                 Err(e) => {
-                    self.status = format!("无法回到该位置：{e}");
+                    self.status = i18n::cannot_restore(e);
                 }
             }
             return;
         }
-        self.status = "无法回到该位置（标签已关闭）".to_string();
+        self.status = t().cannot_restore_closed.to_string();
     }
 
     fn nav_back(&mut self) {
@@ -2646,7 +2663,7 @@ impl App {
                         .map(|p| (p.current_page() + 1, p.page_count.max(1)))
                         .unwrap_or((1, 1));
                     let z = tab.pdf.as_ref().map(|p| p.zoom).unwrap_or(1.0);
-                    ui.label(format!("PDF  第 {cur}/{n} 页  {:.0}%", z * 100.0));
+                    ui.label(i18n::pdf_status(cur, n, (z * 100.0).round() as i32));
                 } else if tab.kind == DocKind::Word {
                     ui.separator();
                     let fmt = file::ext_lower(tab.doc.path.as_deref().unwrap_or(Path::new("")))
@@ -2654,9 +2671,11 @@ impl App {
                         .unwrap_or_else(|| "DOCX".into());
                     let page = tab.preview.word_page + 1;
                     let n = tab.preview.word_pages.max(1);
-                    ui.label(format!(
-                        "{fmt}  第 {page}/{n} 页  只读  {:.0}%",
-                        tab.preview.word_zoom * 100.0
+                    ui.label(i18n::word_status(
+                        &fmt,
+                        page,
+                        n,
+                        (tab.preview.word_zoom * 100.0).round() as i32,
                     ));
                 } else if tab.kind == DocKind::Image {
                     ui.separator();
@@ -2665,7 +2684,7 @@ impl App {
                         .as_ref()
                         .map(|i| i.status_text())
                         .unwrap_or_else(|| "IMG".into());
-                    ui.label(format!("{s}  只读"));
+                    ui.label(i18n::image_readonly_status(&s));
                 }
                 if tab.kind != DocKind::Image {
                     ui.separator();
@@ -2674,10 +2693,10 @@ impl App {
                     } else {
                         tab.doc.text.lines().count().max(1)
                     };
-                    ui.label(format!("{lines} 行"));
+                    ui.label(i18n::n_lines(lines));
                     if tab.sel_chars > 0 {
                         ui.separator();
-                        ui.label(format!("已选择 {} 字", tab.sel_chars));
+                        ui.label(i18n::n_selected(tab.sel_chars));
                     }
                     ui.separator();
                     ui.label(tab.doc.enc.status());
@@ -2695,15 +2714,17 @@ impl App {
         if self.settings_draft.is_none() {
             return;
         }
+        if let Some(d) = &self.settings_draft {
+            i18n::set(d.ui_lang);
+        }
         let mut open = true;
         let mut apply = false;
         let mut cancel = false;
-        let notes =
-            "设置保存在本机 %LocalAppData%\\rustmarkdown\\settings.json。\n标题编号仅影响预览显示，不修改源文件。";
-        egui::Window::new("参数设置")
+        let notes = t().settings_notes;
+        egui::Window::new(t().settings)
             .collapsible(false)
             .resizable(true)
-            .default_size([480.0, 360.0])
+            .default_size([480.0, 420.0])
             .open(&mut open)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
@@ -2711,16 +2732,28 @@ impl App {
                     return;
                 };
                 ui.add_space(4.0);
-                ui.label(RichText::new("Markdown Tab").strong().size(15.0));
-                ui.label(
-                    RichText::new(
-                        "Tab 宽度（字符）。列表缩进层级与预览缩进按此列宽计算。源码仍是单个 Tab，不会变成多个空格。默认 3。",
-                    )
-                    .weak(),
-                );
+                ui.label(RichText::new(t().language).strong().size(15.0));
+                ui.label(RichText::new(t().language_help).weak());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label("宽度（字符）");
+                    ui.label(t().language);
+                    let label = match draft.ui_lang {
+                        Lang::Zh => t().lang_zh,
+                        Lang::En => t().lang_en,
+                    };
+                    egui::ComboBox::from_id_salt("ui_lang")
+                        .selected_text(label)
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut draft.ui_lang, Lang::Zh, t().lang_zh);
+                            ui.selectable_value(&mut draft.ui_lang, Lang::En, t().lang_en);
+                        });
+                });
+                ui.add_space(12.0);
+                ui.label(RichText::new(t().md_tab).strong().size(15.0));
+                ui.label(RichText::new(t().tab_width_help).weak());
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label(t().width_chars);
                     let label = draft.md_tab_size.to_string();
                     egui::ComboBox::from_id_salt("md_tab_size")
                         .selected_text(label)
@@ -2731,24 +2764,14 @@ impl App {
                         });
                 });
                 ui.add_space(12.0);
-                ui.checkbox(&mut draft.md_heading_auto_number, "标题自动编号");
-                ui.label(
-                    RichText::new(
-                        "启用后在预览中为标题加 1 / 1.1 / 1.1.1 编号（不修改源文件）。默认开启。",
-                    )
-                    .weak(),
-                );
+                ui.checkbox(&mut draft.md_heading_auto_number, t().heading_auto_number);
+                ui.label(RichText::new(t().heading_auto_help).weak());
                 ui.add_space(12.0);
-                ui.label(RichText::new("图片最大显示宽度").strong().size(15.0));
-                ui.label(
-                    RichText::new(
-                        "限制预览里图片的显示宽度。0 表示不限制，按预览区宽度。HTML 上写的 width 更小时仍用较小值。",
-                    )
-                    .weak(),
-                );
+                ui.label(RichText::new(t().img_max_width).strong().size(15.0));
+                ui.label(RichText::new(t().img_max_help).weak());
                 ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.label("宽度");
+                    ui.label(t().width);
                     let label = Settings::img_max_label(draft.md_img_max_width);
                     egui::ComboBox::from_id_salt("md_img_max_width")
                         .selected_text(label)
@@ -2763,23 +2786,18 @@ impl App {
                         });
                 });
                 ui.add_space(12.0);
-                ui.checkbox(&mut draft.enable_logs, "启用日志");
-                ui.label(
-                    RichText::new(
-                        "总开关：写入 UI 卡顿等到 %LocalAppData%\\rustmarkdown\\ui.log。默认关闭。",
-                    )
-                    .weak(),
-                );
+                ui.checkbox(&mut draft.enable_logs, t().enable_logs);
+                ui.label(RichText::new(t().logs_help).weak());
                 ui.add_space(16.0);
-                ui.label(RichText::new("说明").strong().size(15.0));
+                ui.label(RichText::new(t().notes).strong().size(15.0));
                 ui.label(RichText::new(notes).weak());
                 ui.add_space(16.0);
                 ui.horizontal(|ui| {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("确定").clicked() {
+                        if ui.button(t().ok).clicked() {
                             apply = true;
                         }
-                        if ui.button("取消").clicked() {
+                        if ui.button(t().cancel).clicked() {
                             cancel = true;
                         }
                     });
@@ -2789,6 +2807,7 @@ impl App {
             cancel = true;
         }
         if !open || cancel {
+            i18n::set(self.settings.ui_lang);
             self.settings_draft = None;
         } else if apply {
             if let Some(draft) = self.settings_draft.take() {
@@ -2810,18 +2829,18 @@ impl App {
                     .map(|t| t.doc.display_name())
                     .unwrap_or_default();
                 let mut action = 0;
-                egui::Window::new("文件已更改")
+                egui::Window::new(t().file_changed)
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
-                        ui.label(format!("「{name}」在磁盘上已更改，且当前有未保存修改。"));
+                        ui.label(i18n::file_changed_dirty(&name));
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button("重载（丢弃修改）").clicked() {
+                            if ui.button(t().reload_discard).clicked() {
                                 action = 1;
                             }
-                            if ui.button("保留编辑").clicked() {
+                            if ui.button(t().keep_edits).clicked() {
                                 action = 2;
                             }
                         });
@@ -2842,14 +2861,14 @@ impl App {
                     String::new()
                 };
                 let mut open = true;
-                egui::Window::new("错误")
+                egui::Window::new(t().error)
                     .collapsible(false)
                     .resizable(false)
                     .open(&mut open)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
                         ui.label(&msg);
-                        if ui.button("确定").clicked() {
+                        if ui.button(t().ok).clicked() {
                             self.dialog = None;
                         }
                     });
@@ -2867,21 +2886,21 @@ impl App {
                     .unwrap_or_default();
                 let mut close_dialog = false;
                 let mut action = 0; // 0 none 1 save 2 discard 3 cancel
-                egui::Window::new("未保存的更改")
+                egui::Window::new(t().unsaved_changes)
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
-                        ui.label(format!("「{name}」有未保存的更改。"));
+                        ui.label(i18n::unsaved_named(&name));
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button("保存").clicked() {
+                            if ui.button(t().save).clicked() {
                                 action = 1;
                             }
-                            if ui.button("不保存").clicked() {
+                            if ui.button(t().dont_save).clicked() {
                                 action = 2;
                             }
-                            if ui.button("取消").clicked() {
+                            if ui.button(t().cancel).clicked() {
                                 action = 3;
                             }
                         });
@@ -2907,21 +2926,21 @@ impl App {
             }
             Some(Dialog::CloseAll) => {
                 let mut action = 0;
-                egui::Window::new("关闭全部")
+                egui::Window::new(t().close_all)
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
-                        ui.label("有未保存的更改。确定关闭全部标签？");
+                        ui.label(t().close_all_confirm);
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button("保存全部").clicked() {
+                            if ui.button(t().save_all).clicked() {
                                 action = 1;
                             }
-                            if ui.button("不保存关闭").clicked() {
+                            if ui.button(t().close_without_save).clicked() {
                                 action = 2;
                             }
-                            if ui.button("取消").clicked() {
+                            if ui.button(t().cancel).clicked() {
                                 action = 3;
                             }
                         });
@@ -2942,13 +2961,13 @@ impl App {
                         if ok {
                             self.dialog = None;
                             self.close_all_tabs();
-                            self.status = "已关闭全部标签".to_string();
+                            self.status = t().closed_all.to_string();
                         }
                     }
                     2 => {
                         self.dialog = None;
                         self.close_all_tabs();
-                        self.status = "已关闭全部标签".to_string();
+                        self.status = t().closed_all.to_string();
                     }
                     3 => self.dialog = None,
                     _ => {}
@@ -2956,19 +2975,19 @@ impl App {
             }
             Some(Dialog::About) => {
                 let mut open = true;
-                egui::Window::new("关于 rustmarkdown")
+                egui::Window::new(t().about)
                     .collapsible(false)
                     .resizable(false)
                     .open(&mut open)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
                         ui.heading("rustmarkdown");
-                        ui.label(format!("版本 {}", env!("CARGO_PKG_VERSION")));
+                        ui.label(i18n::version(env!("CARGO_PKG_VERSION")));
                         ui.add_space(8.0);
-                        ui.label("Windows 优先的原生 Markdown 预览 / 编辑器。");
-                        ui.label("不依赖浏览器内核。");
+                        ui.label(t().about_line1);
+                        ui.label(t().about_line2);
                         ui.add_space(8.0);
-                        if ui.button("确定").clicked() {
+                        if ui.button(t().ok).clicked() {
                             self.dialog = None;
                         }
                     });
@@ -2978,21 +2997,21 @@ impl App {
             }
             Some(Dialog::Quit) => {
                 let mut action = 0;
-                egui::Window::new("退出")
+                egui::Window::new(t().quit)
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                     .show(ctx, |ui| {
-                        ui.label("有未保存的更改。确定退出？");
+                        ui.label(t().quit_confirm);
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
-                            if ui.button("保存全部").clicked() {
+                            if ui.button(t().save_all).clicked() {
                                 action = 1;
                             }
-                            if ui.button("不保存退出").clicked() {
+                            if ui.button(t().quit_without_save).clicked() {
                                 action = 2;
                             }
-                            if ui.button("取消").clicked() {
+                            if ui.button(t().cancel).clicked() {
                                 action = 3;
                             }
                         });
@@ -3084,17 +3103,17 @@ impl App {
                     tab.doc.mark_clean();
                     tab.reset_text_undo();
                     tab.reparse(ts);
-                    self.status = format!("已从磁盘重载 {}", file_label(&path));
+                    self.status = i18n::reloaded(&file_label(&path));
                 }
                 Err(e) => self.status = e,
             },
             Some(DocKind::Pdf) => {
                 self.wins[wi].tabs[ti].pdf = Some(view::pdf::PdfSession::open(&path));
-                self.status = format!("已从磁盘重载 {}", file_label(&path));
+                self.status = i18n::reloaded(&file_label(&path));
             }
             Some(DocKind::Image) => {
                 self.wins[wi].tabs[ti].image = Some(view::img_view::ImageSession::open(&path));
-                self.status = format!("已从磁盘重载 {}", file_label(&path));
+                self.status = i18n::reloaded(&file_label(&path));
             }
             Some(DocKind::Word) => match crate::io::word::load(&path) {
                 Ok((text, asset)) => {
@@ -3104,7 +3123,7 @@ impl App {
                     tab.asset_dir = Some(asset);
                     tab.reset_text_undo();
                     tab.reparse(ts);
-                    self.status = format!("已从磁盘重载 {}", file_label(&path));
+                    self.status = i18n::reloaded(&file_label(&path));
                 }
                 Err(e) => self.status = e,
             },
@@ -3219,16 +3238,9 @@ fn show_welcome(ui: &mut egui::Ui) {
         ui.add_space(80.0);
         ui.heading("rustmarkdown");
         ui.add_space(12.0);
-        ui.label(
-            "拖放 Markdown / Word / PDF / 图片、文件夹或快捷方式（.lnk）到此窗口，或使用「文件」菜单 / 工具栏。",
-        );
+        ui.label(t().welcome_hint);
         ui.add_space(8.0);
-        ui.label(
-            RichText::new(
-                "Ctrl+O 打开   Ctrl+F 查找   Ctrl+Shift+O 文件夹   Ctrl+1/2/3 模式   F4 侧栏",
-            )
-            .weak(),
-        );
+        ui.label(RichText::new(t().welcome_keys).weak());
     });
 }
 
@@ -3253,7 +3265,7 @@ impl eframe::App for App {
                     egui::Frame::popup(ui.style())
                         .inner_margin(16.0)
                         .show(ui, |ui| {
-                            ui.label(RichText::new("松开以打开文件").size(18.0));
+                            ui.label(RichText::new(t().drop_to_open).size(18.0));
                         });
                 });
         }

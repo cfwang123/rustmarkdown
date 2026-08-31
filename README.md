@@ -13,7 +13,7 @@ Follows the DocviewWPF native-render approach (block parse with source line numb
 Implemented:
 
 - Multi-tab: open / close / switch / path de-dupe / drag reorder / middle-click close; long names are clipped
-- Menu bar (File / View / Tools / Help) and icon toolbar (hover shows name and shortcut)
+- Menu bar (File / View / Tools / Help; View → Language for Chinese / English) and icon toolbar (hover shows name and shortcut)
 - Three modes (source, side-by-side, preview; resizable splitter)
 - Open, save, save as; prompt on unsaved close (undoing back to the last saved/opened text clears the dirty flag)
 - Drag-and-drop files / folders / `.lnk` (including CJK paths); folders load into the sidebar tree; missing paths fall back to a temp file; errors show a dialog; CLI paths. If an instance is already running, a new file opens as a tab in that window (no second process)
@@ -23,7 +23,7 @@ Implemented:
 - ` ```mermaid ` fences: flowcharts / sequence diagrams in pure Rust (no browser; unsupported syntax falls back to source + error)
 - App icon (title bar / taskbar / exe)
 - Release / double-click exe: no console window
-- Settings (Ctrl+,): Markdown tab width, heading auto-number, max image width, master log switch; stored in `%LocalAppData%\rustmarkdown\settings.json`
+- Settings (Ctrl+,): UI language (Chinese / English), Markdown tab width, heading auto-number, max image width, master log switch; stored in `%LocalAppData%\rustmarkdown\settings.json`
 - Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root; reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
 - Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file
 - Preview task lists (`- [ ]` / `- [x]`) read-only
@@ -114,6 +114,7 @@ cargo run -- --selftest
 src/
   main.rs      entry and CLI
   app.rs       window state, menus, toolbar, shortcuts, drop, jump history
+  i18n.rs      Chinese / English UI strings
   nav.rs       back / forward stack
   tabs.rs      tab bar (follow-drag reorder / tear-off / merge)
   workspace.rs folder workspace tree

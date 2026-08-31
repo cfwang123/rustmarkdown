@@ -38,7 +38,7 @@ pub fn collect(doc: &MdDoc, auto_number: bool) -> Vec<TocEntry> {
 pub fn collect_pages(page_count: usize) -> Vec<TocEntry> {
     (0..page_count)
         .map(|i| TocEntry {
-            title: format!("第 {} 页", i + 1),
+            title: crate::i18n::page_n(i + 1),
             level: 1,
             line0: i,
             parent: None,
@@ -286,10 +286,10 @@ pub fn show(
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(RichText::new("章节列表").strong().size(12.5));
+                ui.label(RichText::new(crate::i18n::t().chapter_list).strong().size(12.5));
             });
             ui.add_space(4.0);
-            let hint = RichText::new("筛选章节…").size(12.0).weak();
+            let hint = RichText::new(crate::i18n::t().filter_chapters).size(12.0).weak();
             ui.add(
                 egui::TextEdit::singleline(filter)
                     .hint_text(hint)
@@ -300,7 +300,7 @@ pub fn show(
 
             if entries.is_empty() {
                 ui.label(
-                    RichText::new("当前文档无章节")
+                    RichText::new(crate::i18n::t().no_headings)
                         .size(12.0)
                         .color(Color32::from_rgb(0x88, 0x88, 0x88)),
                 );

@@ -190,27 +190,27 @@ pub fn show(ui: &mut Ui, ws: &mut Workspace) -> Option<ExplorerAction> {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.add_enabled_ui(ws.can_up(), |ui| {
-            if icons::button(ui, Icon::Up, false, "上一级").clicked() {
+            if icons::button(ui, Icon::Up, false, crate::i18n::t().parent_folder).clicked() {
                 if ws.go_up() {
                     action = Some(ExplorerAction::RootChanged);
                 }
             }
         });
         ui.add_enabled_ui(ws.can_back(), |ui| {
-            if icons::button(ui, Icon::Back, false, "后退").clicked() {
+            if icons::button(ui, Icon::Back, false, crate::i18n::t().back).clicked() {
                 if ws.go_back() {
                     action = Some(ExplorerAction::RootChanged);
                 }
             }
         });
         ui.add_enabled_ui(ws.can_forward(), |ui| {
-            if icons::button(ui, Icon::Forward, false, "前进").clicked() {
+            if icons::button(ui, Icon::Forward, false, crate::i18n::t().forward).clicked() {
                 if ws.go_forward() {
                     action = Some(ExplorerAction::RootChanged);
                 }
             }
         });
-        if icons::button(ui, Icon::Refresh, false, "刷新").clicked() {
+        if icons::button(ui, Icon::Refresh, false, crate::i18n::t().refresh).clicked() {
             action = Some(ExplorerAction::Refresh);
         }
     });
@@ -230,7 +230,7 @@ pub fn show(ui: &mut Ui, ws: &mut Workspace) -> Option<ExplorerAction> {
         .id(path_id)
         .desired_width(ui.available_width())
         .font(FontId::proportional(12.0))
-        .hint_text("绝对路径");
+        .hint_text(crate::i18n::t().abs_path);
     let resp = ui.add(te);
     if resp.lost_focus() {
         if let Some(a) = commit_path_edit(ws) {
@@ -322,22 +322,22 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
             || hit.resp.context_menu_opened()
         {
             hit.resp.context_menu(|ui| {
-                if ent.is_dir && ui.button("设为工作目录").clicked() {
+                if ent.is_dir && ui.button(crate::i18n::t().set_as_workspace).clicked() {
                     if ws.navigate(ent.path.clone()) {
                         action = Some(ExplorerAction::RootChanged);
                     }
                     ui.close();
                 }
-                if !ent.is_dir && ui.button("打开").clicked() {
+                if !ent.is_dir && ui.button(crate::i18n::t().open).clicked() {
                     ws.selected = Some(ent.path.clone());
                     action = Some(ExplorerAction::Open(ent.path.clone()));
                     ui.close();
                 }
-                if ui.button("在资源管理器中显示").clicked() {
+                if ui.button(crate::i18n::t().reveal_in_explorer).clicked() {
                     action = Some(ExplorerAction::Reveal(ent.path.clone()));
                     ui.close();
                 }
-                if ui.button("复制路径").clicked() {
+                if ui.button(crate::i18n::t().copy_path).clicked() {
                     action = Some(ExplorerAction::CopyPath(ent.path.clone()));
                     ui.close();
                 }

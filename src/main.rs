@@ -2,6 +2,7 @@
 
 mod app;
 mod doc;
+mod i18n;
 mod io;
 mod nav;
 mod parser;
@@ -20,7 +21,7 @@ fn main() -> eframe::Result<()> {
         if arg == "--selftest" {
             selftest = true;
         } else if arg.starts_with('-') {
-            eprintln!("未知参数：{arg}");
+            eprintln!("{}", crate::i18n::unknown_arg(&arg));
         } else {
             open_paths.push(PathBuf::from(arg));
         }

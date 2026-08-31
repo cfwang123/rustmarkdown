@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::Lang;
+
 const TAB_CHOICES: [i32; 4] = [2, 3, 4, 8];
 const IMG_MAX_CHOICES: [i32; 7] = [0, 400, 600, 800, 1000, 1200, 1600];
 
@@ -30,6 +32,9 @@ pub struct Settings {
     /// 诊断日志总开关（含 UI 卡顿）。默认关。
     #[serde(rename = "enableLogs", default)]
     pub enable_logs: bool,
+    /// 界面语言（zh / en）。默认中文。
+    #[serde(rename = "uiLang", default)]
+    pub ui_lang: Lang,
 }
 
 impl Default for Settings {
@@ -42,6 +47,7 @@ impl Default for Settings {
             side_panel_width: 240,
             recent_files: Vec::new(),
             enable_logs: false,
+            ui_lang: Lang::Zh,
         }
     }
 }
@@ -57,7 +63,7 @@ impl Settings {
 
     pub fn img_max_label(n: i32) -> String {
         if n <= 0 {
-            "不限制（随预览宽度）".to_string()
+            crate::i18n::t().img_unlimited.to_string()
         } else {
             format!("{n} px")
         }

@@ -53,7 +53,7 @@ fn api() -> Result<&'static Api, String> {
 
 fn load_api() -> Result<Api, String> {
     let path = find_dll()?;
-    let lib = unsafe { Library::new(&path) }.map_err(|e| format!("无法加载 pdfium.dll（{}）：{e}", path.display()))?;
+    let lib = unsafe { Library::new(&path) }.map_err(|e| crate::i18n::pdfium_load(path.display(), e))?;
     unsafe {
         let init = *sym(&lib, b"FPDF_InitLibrary\0")?;
         let api = Api {
@@ -84,7 +84,7 @@ fn load_api() -> Result<Api, String> {
 
 fn sym<'a, T>(lib: &'a Library, name: &[u8]) -> Result<Symbol<'a, T>, String> {
     let n = std::str::from_utf8(name).unwrap_or("?").trim_end_matches('\0');
-    unsafe { lib.get(name) }.map_err(|e| format!("pdfium 缺少符号 {n}：{e}"))
+    unsafe { lib.get(name) }.map_err(|e| crate::i18n::pdfium_sym(n, e))
 }
 
 fn find_dll() -> Result<PathBuf, String> {
@@ -102,7 +102,7 @@ fn find_dll() -> Result<PathBuf, String> {
             return Ok(p);
         }
     }
-    Err("找不到 pdfium.dll（应与 exe 同目录，或 native/pdfium/）".into())
+    Err(crate::i18n::t().pdfium_missing.into())
 }
 
 pub struct Doc {
@@ -119,16 +119,16 @@ impl Doc {
     pub fn open_bytes(bytes: Vec<u8>) -> Result<Self, String> {
         let api = api()?;
         if bytes.is_empty() {
-            return Err("PDF 为空".into());
+            return Err(crate::i18n::t().pdf_empty.into());
         }
         let ptr = unsafe { (api.load_mem)(bytes.as_ptr(), bytes.len() as c_int, std::ptr::null()) };
         if ptr.is_null() {
-            return Err("无法打开 PDF（格式错误或已加密）".into());
+            return Err(crate::i18n::t().pdf_open_fail.into());
         }
         let n = unsafe { (api.page_count)(ptr) };
         if n <= 0 {
             unsafe { (api.close_doc)(ptr) };
-            return Err("PDF 没有页面".into());
+            return Err(crate::i18n::t().pdf_no_pages.into());
         }
         let mut sizes = Vec::with_capacity(n as usize);
         for i in 0..n {
@@ -152,7 +152,7 @@ impl Doc {
     pub fn render_page(&self, page: u32, width: u32) -> Result<(u32, u32, Vec<u8>), String> {
         let api = api()?;
         if page >= self.page_count {
-            return Err("页码超出范围".into());
+            return Err(crate::i18n::t().pdf_page_range.into());
         }
         let (pw, ph) = self.sizes[page as usize];
         let w = width.max(120).min(2400);
@@ -161,12 +161,12 @@ impl Doc {
         unsafe {
             let pg = (api.load_page)(self.ptr, page as c_int);
             if pg.is_null() {
-                return Err("无法加载页面".into());
+                return Err(crate::i18n::t().pdf_page_load.into());
             }
             let bmp = (api.bmp_create)(w as c_int, h as c_int, 1);
             if bmp.is_null() {
                 (api.close_page)(pg);
-                return Err("无法创建位图".into());
+                return Err(crate::i18n::t().pdf_bitmap.into());
             }
             (api.bmp_fill)(bmp, 0, 0, w as c_int, h as c_int, 0xFFFFFFFF);
             (api.render)(
@@ -274,7 +274,7 @@ impl Drop for Doc {
 }
 
 pub fn read_pdf_bytes(path: &Path) -> Result<Vec<u8>, String> {
-    std::fs::read(path).map_err(|e| format!("无法读取 PDF：{} ({e})", path.display()))
+    std::fs::read(path).map_err(|e| crate::i18n::pdf_read(path.display(), e))
 }
 
 #[cfg(test)]

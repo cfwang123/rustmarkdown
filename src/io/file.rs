@@ -130,7 +130,7 @@ impl TextEnc {
 }
 
 pub fn read_text(path: &Path) -> Result<(String, Newline, TextEnc), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("读取失败：{} ({e})", path.display()))?;
+    let bytes = std::fs::read(path).map_err(|e| crate::i18n::read_fail_path(path.display(), e))?;
     Ok(decode_bytes(&bytes))
 }
 
@@ -231,13 +231,13 @@ pub fn write_text(path: &Path, text: &str, newline: Newline, enc: &TextEnc) -> R
     let mut tmp = path.as_os_str().to_os_string();
     tmp.push(".tmp");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, &bytes).map_err(|e| format!("写入临时文件失败：{e}"))?;
+    std::fs::write(&tmp, &bytes).map_err(|e| crate::i18n::write_tmp_fail(e))?;
     if cfg!(windows) && path.exists() {
-        std::fs::remove_file(path).map_err(|e| format!("无法覆盖原文件：{e}"))?;
+        std::fs::remove_file(path).map_err(|e| crate::i18n::cannot_overwrite(e))?;
     }
     std::fs::rename(&tmp, path).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
-        format!("保存失败：{e}")
+        crate::i18n::save_fail(e)
     })
 }
 

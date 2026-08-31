@@ -27,10 +27,11 @@ pub enum DocKind {
 
 impl ViewMode {
     pub fn label(self) -> &'static str {
+        let t = crate::i18n::t();
         match self {
-            ViewMode::Code => "代码",
-            ViewMode::Side => "侧边预览",
-            ViewMode::Preview => "预览",
+            ViewMode::Code => t.mode_code,
+            ViewMode::Side => t.mode_side,
+            ViewMode::Preview => t.mode_preview,
         }
     }
 }
@@ -114,7 +115,7 @@ impl DocSession {
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| p.to_string_lossy().into_owned()),
-            None => "未命名".to_string(),
+            None => crate::i18n::t().untitled.to_string(),
         }
     }
 

@@ -123,12 +123,12 @@ pub fn show(ui: &mut Ui, st: &mut ImageSession) -> ImgAction {
     ui.painter().rect_filled(ui.max_rect(), 0.0, BG);
     if let Some(err) = &st.err {
         ui.add_space(24.0);
-        ui.label(RichText::new(format!("无法打开图片：\n{err}")).color(Color32::from_rgb(0xB9, 0x1C, 0x1C)));
+        ui.label(RichText::new(crate::i18n::cannot_open_image(err)).color(Color32::from_rgb(0xB9, 0x1C, 0x1C)));
         return ImgAction::None;
     }
     let Some(raster) = st.raster.clone() else {
         ui.add_space(24.0);
-        ui.label(RichText::new("正在打开图片…").color(Color32::from_rgb(0x6B, 0x72, 0x80)));
+        ui.label(RichText::new(crate::i18n::t().opening_image).color(Color32::from_rgb(0x6B, 0x72, 0x80)));
         return ImgAction::None;
     };
 
@@ -208,11 +208,11 @@ pub fn show(ui: &mut Ui, st: &mut ImageSession) -> ImgAction {
     paint_rot(&mut ui, raster.tex.id(), img_rect, st.rot_quarter, stage);
 
     resp.context_menu(|ui| {
-        if ui.button("复制图片").on_hover_text("Ctrl+C").clicked() {
+        if ui.button(crate::i18n::t().copy_image).on_hover_text("Ctrl+C").clicked() {
             action = ImgAction::Copy;
             ui.close();
         }
-        if ui.button("复制为文件").clicked() {
+        if ui.button(crate::i18n::t().copy_as_file).clicked() {
             action = ImgAction::CopyFile;
             ui.close();
         }
@@ -292,12 +292,12 @@ fn paint_rot(ui: &mut Ui, tex: egui::TextureId, dest: Rect, rot: u8, clip: Rect)
 }
 
 fn load_rgba(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("读取失败：{e}"))?;
+    let bytes = std::fs::read(path).map_err(|e| crate::i18n::read_fail(e))?;
     if bytes.is_empty() {
-        return Err("文件为空".into());
+        return Err(crate::i18n::t().file_empty.into());
     }
     let img = image::load_from_memory(&bytes)
-        .map_err(|e| format!("无法解码：{e}"))?
+        .map_err(|e| crate::i18n::decode_fail(e))?
         .to_rgba8();
     Ok((img.width(), img.height(), img.into_raw()))
 }

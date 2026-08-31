@@ -19,32 +19,31 @@ pub fn load(path: &Path) -> Result<(String, PathBuf), String> {
         .name("word-parse".into())
         .stack_size(PARSE_STACK)
         .spawn(move || load_inner(&path))
-        .map_err(|e| format!("无法启动 Word 解析：{e}"))?
+        .map_err(|e| crate::i18n::word_parse_start(e))?
         .join()
-        .unwrap_or_else(|_| Err("解析 Word 时崩溃（可能栈溢出或文档损坏）".into()))
+        .unwrap_or_else(|_| Err(crate::i18n::t().word_parse_crash.into()))
 }
 
 fn load_inner(path: &Path) -> Result<(String, PathBuf), String> {
     let fmt = DocumentFormat::from_path(path).ok_or_else(|| {
-        format!(
-            "无法识别 Word 格式：{}",
-            file::ext_lower(path).unwrap_or_else(|| "(无扩展名)".into())
+        crate::i18n::word_format(
+            &file::ext_lower(path).unwrap_or_else(|| crate::i18n::t().no_ext.into()),
         )
     })?;
     let bytes = read_shared(path)?;
     if bytes.is_empty() {
-        return Err("Word 文档是空文件".into());
+        return Err(crate::i18n::t().word_empty.into());
     }
     let cursor = Cursor::new(bytes);
-    let doc = Document::from_reader(cursor, fmt).map_err(|e| format!("无法打开 Word 文档：{e}"))?;
+    let doc = Document::from_reader(cursor, fmt).map_err(|e| crate::i18n::word_open(e))?;
     let md = doc.to_markdown();
     let ir = doc.to_ir();
     let dir = cache_dir(path);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("无法创建预览缓存：{e}"))?;
+    std::fs::create_dir_all(&dir).map_err(|e| crate::i18n::word_cache(e))?;
     let files = write_images(&ir, &dir);
     let md = rewrite_images(&md, &files);
     let md = if md.trim().is_empty() {
-        "(空文档)".to_string()
+        crate::i18n::t().empty_doc.to_string()
     } else {
         md
     };
@@ -59,15 +58,15 @@ fn read_shared(path: &Path) -> Result<Vec<u8>, String> {
             .read(true)
             .share_mode(0x7)
             .open(path)
-            .map_err(|e| format!("无法读取 Word 文档：{} ({e})", path.display()))?;
+            .map_err(|e| crate::i18n::word_read(path.display(), e))?;
         let mut buf = Vec::new();
         f.read_to_end(&mut buf)
-            .map_err(|e| format!("读取 Word 文档失败：{e}"))?;
+            .map_err(|e| crate::i18n::word_read_fail(e))?;
         Ok(buf)
     }
     #[cfg(not(windows))]
     {
-        std::fs::read(path).map_err(|e| format!("无法读取 Word 文档：{} ({e})", path.display()))
+        std::fs::read(path).map_err(|e| crate::i18n::word_read(path.display(), e))
     }
 }
 

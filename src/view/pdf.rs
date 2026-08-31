@@ -235,7 +235,7 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
     }
     if st.page_count == 0 {
         ui.add_space(24.0);
-        ui.label(RichText::new("正在打开 PDF…").color(Color32::from_rgb(0x6B, 0x72, 0x80)));
+        ui.label(RichText::new(crate::i18n::t().opening_pdf).color(Color32::from_rgb(0x6B, 0x72, 0x80)));
         ui.ctx().request_repaint();
         return PdfAction::None;
     }
@@ -351,7 +351,7 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                                 } else {
                                     resp.clone().on_hover_cursor(CursorIcon::PointingHand);
                                 }
-                                resp.clone().on_hover_text("拖选文字 · 双击预览 · 右键复制");
+                                resp.clone().on_hover_text(crate::i18n::t().pdf_drag_hint);
                                 if resp.dragged_by(PointerButton::Primary)
                                     || (primary_down && resp.contains_pointer())
                                 {
@@ -367,7 +367,7 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                                 let copy_text = st.selected_text();
                                 resp.context_menu(|ui| {
                                     if has_text {
-                                        if ui.button("复制文字").clicked() {
+                                        if ui.button(crate::i18n::t().copy_text).clicked() {
                                             if let Some(t) = copy_text.clone() {
                                                 ui.ctx().copy_text(t.clone());
                                                 action = PdfAction::CopyText(t);
@@ -375,11 +375,11 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                                             ui.close();
                                         }
                                     }
-                                    if ui.button("复制图片").clicked() {
+                                    if ui.button(crate::i18n::t().copy_image).clicked() {
                                         action = PdfAction::Copy(rast.clone());
                                         ui.close();
                                     }
-                                    if ui.button("复制为文件").clicked() {
+                                    if ui.button(crate::i18n::t().copy_as_file).clicked() {
                                         action = PdfAction::CopyFile(rast.clone());
                                         ui.close();
                                     }
@@ -388,7 +388,7 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                             PageView::Failed => {
                                 ui.centered_and_justified(|ui| {
                                     ui.label(
-                                        RichText::new(format!("第 {} 页无法渲染", i + 1))
+                                        RichText::new(crate::i18n::pdf_page_fail(i + 1))
                                             .color(Color32::GRAY),
                                     );
                                 });
@@ -396,7 +396,7 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                             PageView::Loading => {
                                 ui.centered_and_justified(|ui| {
                                     ui.label(
-                                        RichText::new(format!("第 {} 页…", i + 1))
+                                        RichText::new(crate::i18n::pdf_page_loading(i + 1))
                                             .color(Color32::GRAY),
                                     );
                                 });
