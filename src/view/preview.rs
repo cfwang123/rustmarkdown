@@ -51,6 +51,17 @@ pub struct PreviewState {
     /// 顶层块指纹（不含源行号，插入上方不污染后续段）。
     fingerprints: Vec<u64>,
     last_page_w: f32,
+    /// 空白处拖选的行级选区（内容坐标 y）。
+    blank_sel: Option<BlankSel>,
+}
+
+/// 空白处按下后的行级选区：覆盖 anchor 到 cur 之间的所有文本行。
+#[derive(Clone, Copy)]
+struct BlankSel {
+    anchor_y: f32,
+    cur_y: f32,
+    /// 松开鼠标后冻结，等 Ctrl+C 复制或重新按下清除。
+    frozen: bool,
 }
 
 impl PreviewState {
@@ -87,6 +98,7 @@ impl Default for PreviewState {
             pending_word_page: None,
             fingerprints: Vec::new(),
             last_page_w: 0.0,
+            blank_sel: None,
         }
     }
 }
@@ -298,24 +310,75 @@ pub fn show(
                         dirty_hi,
                         !wrap_changed,
                     );
+                    // 空白处拖选：行级选区。点在文字上时原生选择接管（此处让位）。
+                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    let any_copy = ui
+                        .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+                    if esc || (ui.input(|i| i.pointer.any_pressed()) && !sel_bg.drag_started()) {
+                        st.blank_sel = None;
+                    }
                     if sel_bg.drag_started() {
-                        if let Some(pos) = sel_bg.interact_pointer_pos() {
+                        if let Some(p) = sel_bg.interact_pointer_pos() {
+                            st.blank_sel = Some(BlankSel {
+                                anchor_y: p.y,
+                                cur_y: p.y,
+                                frozen: false,
+                            });
+                        }
+                    }
+                    let mut sel_copy = String::new();
+                    if let Some(sel) = st.blank_sel {
+                        let mut sel = sel;
+                        if !sel.frozen {
+                            if ui.input(|i| i.pointer.primary_down()) {
+                                if let Some(p) = ui.input(|i| i.pointer.latest_pos()) {
+                                    sel.cur_y = p.y;
+                                }
+                            } else {
+                                sel.frozen = true;
+                            }
+                            st.blank_sel = Some(sel);
+                        }
+                        if (sel.cur_y - sel.anchor_y).abs() > 2.0 {
+                            let (y0, y1) = if sel.anchor_y <= sel.cur_y {
+                                (sel.anchor_y, sel.cur_y)
+                            } else {
+                                (sel.cur_y, sel.anchor_y)
+                            };
                             let labels = ui.ctx().data_mut(|d| {
-                                d.get_temp::<Vec<(egui::Id, Rect)>>(sel_labels_id())
+                                d.get_temp::<Vec<(Rect, String)>>(sel_labels_id())
                                     .unwrap_or_default()
                             });
-                            if let Some(target) = snap_blank_press(&labels, pos) {
-                                // 合成一次「行尾/行首按下」：让 egui 的文字选择从最近的文本行开始。
-                                ui.ctx().input_mut(|i| {
-                                    i.events.push(egui::Event::PointerButton {
-                                        pos: target,
-                                        button: egui::PointerButton::Primary,
-                                        pressed: true,
-                                        modifiers: Default::default(),
-                                    });
-                                });
+                            let covered: Vec<(&Rect, &String)> = labels
+                                .iter()
+                                .filter(|(r, _)| !(r.bottom() < y0 || r.top() > y1))
+                                .map(|(r, t)| (r, t))
+                                .collect();
+                            let x0 = ui.max_rect().left();
+                            let x1 = ui.max_rect().right();
+                            for (r, _) in &covered {
+                                let top = r.top().max(y0);
+                                let bot = r.bottom().min(y1);
+                                ui.painter().rect_filled(
+                                    Rect::from_min_max(pos2(x0, top), pos2(x1, bot)),
+                                    0.0,
+                                    SEL_BG,
+                                );
+                            }
+                            let mut prev: Option<Rect> = None;
+                            for (r, t) in &covered {
+                                if let Some(p) = prev {
+                                    if r.top() >= p.bottom() - 1.0 {
+                                        sel_copy.push('\n');
+                                    }
+                                }
+                                sel_copy.push_str(t);
+                                prev = Some(**r);
                             }
                         }
+                    }
+                    if any_copy && !sel_copy.is_empty() {
+                        ui.ctx().copy_text(sel_copy);
                     }
                     st.top_line = 0;
                     for (i, b) in doc.blocks.iter().enumerate() {
@@ -1620,78 +1683,6 @@ fn sel_labels_id() -> egui::Id {
     egui::Id::new("preview_sel_labels")
 }
 
-/// 空白处按下吸附：取垂直方向最近的文本行，右侧 → 行尾片段右缘，左侧 → 行首片段左缘。
-fn snap_blank_press(labels: &[(egui::Id, Rect)], pos: egui::Pos2) -> Option<egui::Pos2> {
-    if labels.is_empty() {
-        return None;
-    }
-    let mut line: Vec<&Rect> = labels
-        .iter()
-        .map(|(_, r)| r)
-        .filter(|r| r.top() <= pos.y && pos.y <= r.bottom())
-        .collect();
-    if line.is_empty() {
-        let nearest = labels
-            .iter()
-            .map(|(_, r)| r)
-            .min_by(|a, b| {
-                let da = if pos.y < a.top() {
-                    a.top() - pos.y
-                } else {
-                    pos.y - a.bottom()
-                };
-                let db = if pos.y < b.top() {
-                    b.top() - pos.y
-                } else {
-                    pos.y - b.bottom()
-                };
-                da.total_cmp(&db)
-            })?;
-        let band = *nearest;
-        line = labels
-            .iter()
-            .map(|(_, r)| r)
-            .filter(|r| r.top() < band.bottom() && r.bottom() > band.top())
-            .collect();
-    }
-    let min_left = line.iter().map(|r| r.left()).fold(f32::INFINITY, f32::min);
-    let max_right = line
-        .iter()
-        .map(|r| r.right())
-        .fold(f32::NEG_INFINITY, f32::max);
-    let pick = if pos.x >= max_right {
-        line.iter().copied().max_by(|a, b| a.right().total_cmp(&b.right()))
-    } else if pos.x <= min_left {
-        line.iter().copied().min_by(|a, b| a.left().total_cmp(&b.left()))
-    } else {
-        line.iter().copied().min_by(|a, b| {
-            let da = if pos.x < a.left() {
-                a.left() - pos.x
-            } else if pos.x > a.right() {
-                pos.x - a.right()
-            } else {
-                0.0
-            };
-            let db = if pos.x < b.left() {
-                b.left() - pos.x
-            } else if pos.x > b.right() {
-                pos.x - b.right()
-            } else {
-                0.0
-            };
-            da.total_cmp(&db)
-        })
-    }?;
-    let r = pick;
-    let y = pos.y.clamp(r.top() + 1.0, r.bottom() - 1.0);
-    let x = if pos.x < (r.left() + r.right()) * 0.5 {
-        r.left() + 2.0
-    } else {
-        r.right() - 2.0
-    };
-    Some(egui::pos2(x, y))
-}
-
 fn add_flow_text(
     ui: &mut Ui,
     text: &str,
@@ -1781,11 +1772,12 @@ fn add_flow_text(
             .inner
         };
         if sense.is_none() {
-            // 记录可选文本片段矩形：空白处拖选吸附用（每帧由 show 清空重建）。
+            // 记录可选文本片段矩形与文字：空白处拖选高亮/复制用（每帧由 show 清空重建）。
             ui.ctx().data_mut(|d| {
-                let list = d.get_temp::<Vec<(egui::Id, Rect)>>(sel_labels_id());
-                let mut list = list.unwrap_or_default();
-                list.push((r.id, r.rect));
+                let mut list = d
+                    .get_temp::<Vec<(Rect, String)>>(sel_labels_id())
+                    .unwrap_or_default();
+                list.push((r.rect, acc.clone()));
                 d.insert_temp(sel_labels_id(), list);
             });
         }
