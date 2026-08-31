@@ -129,6 +129,8 @@ pub struct Win {
     pub sidebar_tab: SidebarTab,
     pub outline_filter: String,
     pub outline_hl: Option<usize>,
+    /// 上次同步到大纲的正文滚动位置；仅当正文位置变化时才同步大纲。
+    pub outline_sync_line: Option<usize>,
     pub ignore_outline_until: Option<Instant>,
     pub nav: NavHist,
     pub workspace: Option<Workspace>,
@@ -154,6 +156,7 @@ impl Win {
             sidebar_tab: SidebarTab::Outline,
             outline_filter: String::new(),
             outline_hl: None,
+            outline_sync_line: None,
             ignore_outline_until: None,
             nav: NavHist::default(),
             workspace: None,
@@ -1982,18 +1985,23 @@ impl App {
 
     fn show_outline_pane(&mut self, ui: &mut egui::Ui) {
         let auto_num = self.settings.md_heading_auto_number;
-        let follow = match self.win().ignore_outline_until {
-            Some(t) if Instant::now() < t => false,
-            _ => true,
+        let in_cooldown = match self.win().ignore_outline_until {
+            Some(t) => {
+                if Instant::now() < t {
+                    true
+                } else {
+                    self.win_mut().ignore_outline_until = None;
+                    false
+                }
+            }
+            None => false,
         };
-        if follow {
-            self.win_mut().ignore_outline_until = None;
-        }
 
         let mut filter = std::mem::take(&mut self.win_mut().outline_filter);
         let mut last_hl = self.win().outline_hl;
         let mut action = None;
         {
+            let sync_line = self.win().outline_sync_line;
             let win = self.win_mut();
             if let Some(tab) = win.active_tab_mut() {
                 let entries = if tab.kind == DocKind::Pdf {
@@ -2010,6 +2018,7 @@ impl App {
                 } else {
                     tab.preview.top_line
                 };
+                let follow = !in_cooldown && sync_line != Some(current);
                 action = view::outline::show(
                     ui,
                     &entries,
@@ -2020,6 +2029,9 @@ impl App {
                     &mut last_hl,
                     follow,
                 );
+                if follow {
+                    win.outline_sync_line = Some(current);
+                }
             } else {
                 ui.painter().rect_filled(
                     ui.available_rect_before_wrap(),
