@@ -182,12 +182,106 @@ pub fn parse_inlines(text: &str) -> Vec<MdSpan> {
             i = j;
             continue;
         }
+        if let Some((end, target)) = try_fs_path(text, i) {
+            flush(&mut buf, &mut spans);
+            spans.push(MdSpan {
+                kind: MdSpanKind::Link,
+                text: target.clone(),
+                href: target,
+            });
+            i = end;
+            continue;
+        }
         let ch = text[i..].chars().next().unwrap();
         buf.push(ch);
         i += ch.len_utf8();
     }
     flush(&mut buf, &mut spans);
     spans
+}
+
+/// 路径扫描在此类 ASCII 字符处打断（含表格竖线与括号）。
+const PATH_STOP_ASCII: &[u8] = b"()<>\"'`|[]{}";
+/// 全角标点同样打断扫描（中文正文里路径常用它们收尾）。
+const PATH_STOP_CJK: &str = "，、。；：！？（）《》「」『』【】";
+
+/// 识别正文裸文本里的文件系统路径，作为链接返回（对齐 `[]()` 的 Link span）：
+/// - 绝对盘符路径：`D:\a\b.md`、`D:/a/b.md`
+/// - UNC 路径：`\\server\share\a.md`
+/// - 相对路径：含 `\` 或 `/` 且以 1–5 位字母数字扩展名收尾（扩展名须字母开头），
+///   避免把 `24/7.5`、`and/or` 这类普通文本误判成路径。
+fn try_fs_path(text: &str, i: usize) -> Option<(usize, String)> {
+    let b = text.as_bytes();
+    let n = text.len();
+    let is_drive = b[i].is_ascii_alphabetic()
+        && i + 2 < n
+        && b[i + 1] == b':'
+        && (b[i + 2] == b'\\' || b[i + 2] == b'/');
+    let is_unc = b[i] == b'\\' && i + 1 < n && b[i + 1] == b'\\';
+    let mut j = i;
+    while j < n && j - i < 512 {
+        let c = b[j];
+        if c.is_ascii_whitespace() || PATH_STOP_ASCII.contains(&c) {
+            break;
+        }
+        let ch = text[j..].chars().next().unwrap();
+        if ch.len_utf8() > 1 && PATH_STOP_CJK.contains(ch) {
+            break;
+        }
+        j += ch.len_utf8();
+    }
+    while j > i && is_trailing_punct(text[i..j].chars().last().unwrap()) {
+        j -= text[i..j].chars().last().unwrap().len_utf8();
+    }
+    let tok = &text[i..j];
+    if is_drive {
+        return Some((j, tok.to_string()));
+    }
+    if is_unc {
+        if tok.len() >= 5 && tok[2..].contains(['\\', '/']) {
+            return Some((j, tok.to_string()));
+        }
+        return None;
+    }
+    let sep = tok.rfind(|c| c == '\\' || c == '/')?;
+    let dot = tok.rfind('.')?;
+    if dot <= sep || dot == 0 || sep + 1 == dot {
+        return None;
+    }
+    let ext = &tok[dot + 1..];
+    if ext.is_empty()
+        || ext.len() > 5
+        || !ext.starts_with(|c: char| c.is_ascii_alphabetic())
+        || !ext.bytes().all(|c| c.is_ascii_alphanumeric())
+    {
+        return None;
+    }
+    Some((j, tok.to_string()))
+}
+
+fn is_trailing_punct(c: char) -> bool {
+    matches!(
+        c,
+        '.' | ','
+            | ';'
+            | ':'
+            | '!'
+            | '?'
+            | '\''
+            | '"'
+            | '，'
+            | '、'
+            | '。'
+            | '；'
+            | '：'
+            | '！'
+            | '？'
+            | '）'
+            | '》'
+            | '」'
+            | '』'
+            | '】'
+    )
 }
 
 /// 粗体/斜体等包裹内再解析：`**[mdview](mdview/)**` 展开成链接，而不是把 Markdown 当正文。
@@ -357,5 +451,72 @@ fn normalize_color(raw: &str) -> Option<String> {
         Some(format!("#{s}"))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn links(text: &str) -> Vec<(String, String)> {
+        parse_inlines(text)
+            .into_iter()
+            .filter(|s| s.kind == MdSpanKind::Link)
+            .map(|s| (s.text, s.href))
+            .collect()
+    }
+
+    #[test]
+    fn drive_path() {
+        let ls = links("D:\\VS_Projects\\我的文件\\my账号.md");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].0, "D:\\VS_Projects\\我的文件\\my账号.md");
+        assert_eq!(ls[0].1, "D:\\VS_Projects\\我的文件\\my账号.md");
+    }
+
+    #[test]
+    fn relative_path_with_context() {
+        let spans = parse_inlines("见 2026/项目/密码.md，然后继续");
+        assert_eq!(spans[0].kind, MdSpanKind::Text);
+        assert_eq!(spans[0].text, "见 ");
+        assert_eq!(spans[1].kind, MdSpanKind::Link);
+        assert_eq!(spans[1].href, "2026/项目/密码.md");
+        assert_eq!(spans[2].kind, MdSpanKind::Text);
+        assert_eq!(spans[2].text, "，然后继续");
+    }
+
+    #[test]
+    fn trailing_punct_trimmed() {
+        let ls = links("打开 (D:\\a.md)，看");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].0, "D:\\a.md");
+    }
+
+    #[test]
+    fn unc_path() {
+        let ls = links("\\\\server\\share\\a.md");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].0, "\\\\server\\share\\a.md");
+    }
+
+    #[test]
+    fn plain_text_not_linked() {
+        for t in ["24/7.5", "and/or", "a/b", "1.2", "密码.md", "hello world"] {
+            assert!(links(t).is_empty(), "{t} 不应成为链接");
+        }
+    }
+
+    #[test]
+    fn http_url_still_works() {
+        let ls = links("访问 https://example.com/a.md 之后");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].0, "https://example.com/a.md");
+    }
+
+    #[test]
+    fn path_inside_bold_keeps_link() {
+        let ls = links("**D:\\a.md**");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].0, "D:\\a.md");
     }
 }
