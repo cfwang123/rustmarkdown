@@ -40,7 +40,7 @@ Implemented:
 - Ctrl+F find: case-insensitive; F3 / Shift+F3 next/prev; highlight in source and preview
 - Encoding auto-detect (UTF-8 / GBK / UTF-16, …); save in original encoding; watch external changes and prompt reload
 - Tab drag aligned with docview: reorder in-bar; tearing off the bar immediately creates a new window that follows the cursor; drop on another window’s tab bar to merge; context menu “Open as workspace” (file’s parent folder in the left sidebar) and “Move to new window”. Cannot tear off when there is only one tab
-- File menu “Recent files”: last 20 paths, in `%LocalAppData%\rustmarkdown\settings.json`
+- File menu “Recent files”: last 20 paths (shown as `D:\...`, not `\\?\D:\...`), in `%LocalAppData%\rustmarkdown\settings.json`; after a menu is open, hovering another top-level menu switches to it
 - Side-by-side synced scroll (wheel / scrollbar; 650 ms suppress after programmatic scroll)
 - Side-by-side: blue bar on the block under the caret; status bar shows “N selected” when the editor has a selection
 - Status bar: mode / line count / encoding / tab width (no full path); open / switch / save toasts use the file name only

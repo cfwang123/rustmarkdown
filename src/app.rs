@@ -855,7 +855,7 @@ impl App {
             self.status = t().doc_not_saved.to_string();
             return;
         };
-        match crate::io::clipboard::copy_text(&path.display().to_string()) {
+        match crate::io::clipboard::copy_text(&crate::doc::display_path(path)) {
             Ok(()) => self.status = t().copied_path.to_string(),
             Err(e) => self.status = i18n::copy_path_fail(e),
         }
@@ -1413,8 +1413,11 @@ impl App {
         let cur = self.win().active_tab().map(|t| t.mode);
         let mut cmd = None;
 
+        let bar_id = egui::Id::new("menubar_open");
+        let bar_open = ui.ctx().data(|d| d.get_temp::<bool>(bar_id).unwrap_or(false));
+        let mut any_open = false;
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button(t().menu_file, |ui| {
+            let ir = ui.menu_button(t().menu_file, |ui| {
                 if menu_item(ui, t().new, "Ctrl+N", true) {
                     cmd = Some(MenuCmd::New);
                 }
@@ -1433,7 +1436,7 @@ impl App {
                             let name = file_label(&p);
                             let parent = p
                                 .parent()
-                                .map(|d| d.display().to_string())
+                                .map(crate::doc::display_path)
                                 .unwrap_or_default();
                             let label = if parent.is_empty() {
                                 name
@@ -1442,7 +1445,7 @@ impl App {
                             };
                             if ui
                                 .button(RichText::new(label).size(13.0))
-                                .on_hover_text(p.display().to_string())
+                                .on_hover_text(crate::doc::display_path(&p))
                                 .clicked()
                             {
                                 cmd = Some(MenuCmd::OpenRecent(p));
@@ -1491,7 +1494,8 @@ impl App {
                     cmd = Some(MenuCmd::Exit);
                 }
             });
-            ui.menu_button(t().menu_view, |ui| {
+            any_open |= menubar_hover_switch(ui, &ir, bar_open);
+            let ir = ui.menu_button(t().menu_view, |ui| {
                 if menu_item(ui, t().back, "Alt+←", self.win().nav.can_back()) {
                     cmd = Some(MenuCmd::NavBack);
                 }
@@ -1541,17 +1545,21 @@ impl App {
                     }
                 });
             });
-            ui.menu_button(t().menu_tools, |ui| {
+            any_open |= menubar_hover_switch(ui, &ir, bar_open);
+            let ir = ui.menu_button(t().menu_tools, |ui| {
                 if menu_item(ui, t().settings_ellipsis, "Ctrl+,", true) {
                     cmd = Some(MenuCmd::Settings);
                 }
             });
-            ui.menu_button(t().menu_help, |ui| {
+            any_open |= menubar_hover_switch(ui, &ir, bar_open);
+            let ir = ui.menu_button(t().menu_help, |ui| {
                 if menu_item(ui, t().about_app, "", true) {
                     cmd = Some(MenuCmd::About);
                 }
             });
+            any_open |= menubar_hover_switch(ui, &ir, bar_open);
         });
+        ui.ctx().data_mut(|d| d.insert_temp(bar_id, any_open));
 
         if let Some(c) = cmd {
             self.apply_menu(c, ui.ctx());
@@ -3113,12 +3121,15 @@ impl App {
                                 .password(true)
                                 .desired_width(280.0),
                         );
-                        resp.request_focus();
                         if resp.lost_focus()
                             && ui.input(|i| i.key_pressed(egui::Key::Enter))
                             && !self.vim_pw.is_empty()
                         {
                             submit = true;
+                        }
+                        // 每帧 request_focus 会把回车造成的失焦抢回去，只在尚未聚焦时要一次。
+                        if !resp.has_focus() && !resp.lost_focus() {
+                            resp.request_focus();
                         }
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
@@ -3483,6 +3494,22 @@ fn viewport_pointer_screen(ctx: &egui::Context) -> Option<egui::Pos2> {
         let local = i.pointer.latest_pos()?;
         Some(inner.min + local.to_vec2())
     })
+}
+
+/// 菜单已弹出时，指针移到其它顶栏项就切换（对齐 WinForm/WPF）。
+fn menubar_hover_switch<R>(
+    ui: &egui::Ui,
+    ir: &egui::InnerResponse<Option<R>>,
+    bar_open: bool,
+) -> bool {
+    let over = ui
+        .input(|i| i.pointer.hover_pos())
+        .is_some_and(|p| ir.response.rect.contains(p));
+    if bar_open && ir.inner.is_none() && over {
+        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&ir.response));
+        return true;
+    }
+    ir.inner.is_some()
 }
 
 fn menu_item(ui: &mut egui::Ui, text: &str, shortcut: &str, enabled: bool) -> bool {

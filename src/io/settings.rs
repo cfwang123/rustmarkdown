@@ -91,6 +91,9 @@ impl Settings {
         if self.recent_files.len() > 20 {
             self.recent_files.truncate(20);
         }
+        for p in &mut self.recent_files {
+            *p = crate::doc::strip_win_prefix(p);
+        }
     }
 
     pub fn push_recent(&mut self, path: PathBuf) {

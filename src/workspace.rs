@@ -470,16 +470,7 @@ fn parent_dir(p: &Path) -> Option<PathBuf> {
 }
 
 fn abs_path_string(p: &Path) -> String {
-    let s = p.display().to_string();
-    if let Some(rest) = s.strip_prefix(r"\\?\") {
-        if let Some(unc) = rest.strip_prefix("UNC\\") {
-            format!(r"\\{unc}")
-        } else {
-            rest.to_string()
-        }
-    } else {
-        s
-    }
+    crate::doc::display_path(p)
 }
 
 fn trim_hist(h: &mut VecDeque<PathBuf>) {

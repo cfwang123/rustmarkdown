@@ -396,8 +396,26 @@ impl Tab {
     }
 }
 
+/// 去掉 Windows 扩展前缀 `\\?\` / `\\?\UNC\`，显示成 `D:\...` / `\\server\...`。
+pub fn strip_win_prefix(p: &Path) -> PathBuf {
+    let s = p.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
+        if let Some(unc) = rest.strip_prefix("UNC\\") {
+            PathBuf::from(format!(r"\\{unc}"))
+        } else {
+            PathBuf::from(&*rest)
+        }
+    } else {
+        p.to_path_buf()
+    }
+}
+
+pub fn display_path(p: &Path) -> String {
+    strip_win_prefix(p).to_string_lossy().into_owned()
+}
+
 pub fn norm_path(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+    strip_win_prefix(&p.canonicalize().unwrap_or_else(|_| p.to_path_buf()))
 }
 
 fn new_text_undo(text: &str) -> egui::util::undoer::Undoer<String> {
@@ -408,7 +426,8 @@ fn new_text_undo(text: &str) -> egui::util::undoer::Undoer<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::DocSession;
+    use super::{display_path, strip_win_prefix, DocSession};
+    use std::path::Path;
 
     #[test]
     fn undo_to_saved_clears_dirty() {
@@ -436,5 +455,22 @@ mod tests {
         d.text.pop();
         d.sync_dirty();
         assert!(!d.dirty);
+    }
+
+    #[test]
+    fn strip_win_extended_prefix() {
+        assert_eq!(
+            display_path(Path::new(r"\\?\D:\VS_Projects\我的文件")),
+            r"D:\VS_Projects\我的文件"
+        );
+        assert_eq!(
+            strip_win_prefix(Path::new(r"\\?\C:\docs")).as_os_str(),
+            Path::new(r"C:\docs").as_os_str()
+        );
+        assert_eq!(
+            display_path(Path::new(r"\\?\UNC\server\share\a.md")),
+            r"\\server\share\a.md"
+        );
+        assert_eq!(display_path(Path::new(r"D:\a.md")), r"D:\a.md");
     }
 }
