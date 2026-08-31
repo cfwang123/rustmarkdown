@@ -279,7 +279,7 @@ impl App {
         crate::io::single::attach_ui(&cc.egui_ctx);
         i18n::set(app.settings.ui_lang);
         app.status = t().ready.to_string();
-        crate::io::log::set_enabled(app.settings.enable_logs || true); // TEMP-DEBUG：空白拖选排查
+        crate::io::log::set_enabled(app.settings.enable_logs);
         app.wins[0].sidebar_open = app.settings.side_panel_visible;
         app.wins[0].sidebar_width = app.settings.side_panel_width as f32;
         let sess = Session::load();
