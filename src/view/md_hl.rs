@@ -446,9 +446,35 @@ fn row_in_clip(origin_y: f32, clip: Rect, row: &egui::Galley, ri: usize, pad: f3
     y1 >= clip.top() - pad && y0 <= clip.bottom() + pad
 }
 
+/// 从缓存拆出一行：保留网格和字形，但让 `paint_text_selection` 改不成字色
+///（它按 `first_vertex` / `glyph_vertex_range` 去改顶点；置 0 后只铺选区底）。
+fn detach_row_keep_glyphs(src: &egui::epaint::text::Row) -> egui::epaint::text::Row {
+    let mut row = src.clone();
+    row.visuals.glyph_vertex_range = 0..0;
+    for glyph in &mut row.glyphs {
+        glyph.first_vertex = 0;
+    }
+    row
+}
+
+fn hollow_row(
+    dummy: &egui::epaint::text::Row,
+    src: &egui::epaint::text::Row,
+) -> egui::epaint::text::Row {
+    let mut row = dummy.clone();
+    row.size = src.size;
+    row.ends_with_newline = src.ends_with_newline;
+    row.glyphs = src.glyphs.clone();
+    row.visuals = RowVisuals::default();
+    for glyph in &mut row.glyphs {
+        glyph.first_vertex = 0;
+    }
+    row
+}
+
 /// egui 拖选会 `Arc::make_mut` 每一行网格并把字形改成选区色。
 /// 排版在 TextEdit 更新光标之前，且 `.id_salt` 必须用 `Id::new` 才能读到上次选区。
-/// 视口外只丢掉网格、**保留字形**（光标 / Ctrl+A 按字形计列）；清空字形会导致选不中。
+/// 视口外丢掉网格（保留字形，否则光标/Ctrl+A 错位）；视口内从缓存拆开且禁止改字色，避免开头一小段串色。
 fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
     let t0 = std::time::Instant::now();
     let last = galley.rows.len().saturating_sub(1);
@@ -468,21 +494,23 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
     });
     let expanding = sel_all || dragging || shift_click;
     let mut keep = 0usize;
-    let mut lo = 0usize;
-    let mut hi = 0usize;
+    let mut sel_lo = 0usize;
+    let mut sel_hi = 0usize;
     let mut has_sel = false;
     if let Some(range) = range.filter(|r| !r.is_empty()) {
         let [min, max] = range.sorted_cursors();
-        lo = galley.layout_from_cursor(min).row;
-        hi = galley.layout_from_cursor(max).row;
-        if lo > hi {
-            std::mem::swap(&mut lo, &mut hi);
+        sel_lo = galley.layout_from_cursor(min).row;
+        sel_hi = galley.layout_from_cursor(max).row;
+        if sel_lo > sel_hi {
+            std::mem::swap(&mut sel_lo, &mut sel_hi);
         }
         keep = galley.layout_from_cursor(range.primary).row;
         has_sel = true;
     } else if let Some(range) = range {
         keep = galley.layout_from_cursor(range.primary).row;
     }
+    let mut lo = sel_lo;
+    let mut hi = sel_hi;
     if expanding {
         lo = 0;
         hi = last;
@@ -492,7 +520,12 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
     hi = hi.min(last);
     let span = hi.saturating_sub(lo);
     if span <= 2 && !expanding {
-        return galley;
+        let mut g = (*galley).clone();
+        for ri in lo..=hi {
+            let row = detach_row_keep_glyphs(&g.rows[ri].row);
+            g.rows[ri].row = Arc::new(row);
+        }
+        return Arc::new(g);
     }
     let Some(dummy) = dummy_row(ui) else {
         return galley;
@@ -507,20 +540,14 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
     for ri in lo..=hi {
         let near = ri >= keep_lo && ri <= keep_hi;
         let vis = row_in_clip(origin_y, clip, &g, ri, 80.0);
-        if near || vis {
+        let at_sel_end = has_sel && (ri == sel_lo || ri == sel_hi);
+        if near || vis || at_sel_end {
+            let row = detach_row_keep_glyphs(&g.rows[ri].row);
+            g.rows[ri].row = Arc::new(row);
             n_keep += 1;
             continue;
         }
-        let src = &g.rows[ri].row;
-        let mut row = (*dummy).clone();
-        row.size = src.size;
-        row.ends_with_newline = src.ends_with_newline;
-        row.glyphs = src.glyphs.clone();
-        row.visuals = RowVisuals::default();
-        for glyph in &mut row.glyphs {
-            glyph.first_vertex = 0;
-        }
-        g.rows[ri].row = Arc::new(row);
+        g.rows[ri].row = Arc::new(hollow_row(dummy.as_ref(), &g.rows[ri].row));
         n_hollow += 1;
     }
     crate::io::log::slow(
