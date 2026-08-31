@@ -1,4 +1,4 @@
-//! Markdown 源码着色（对齐 docview 纯代码/vim 风：同字号、标题分层色、标记灰色）。
+//! Markdown 源码着色（对齐 docview 纯代码/vim 风：同字号、标题正文近黑、`#` 标记分层色、标记灰色）。
 //! LayoutJob 文本必须与源码逐字节一致，否则 TextEdit 光标会错位。
 
 use std::hash::{Hash, Hasher};
@@ -83,15 +83,8 @@ static GALLEY: LazyLock<Mutex<Vec<GalleyEntry>>> = LazyLock::new(|| Mutex::new(V
 static PARA: LazyLock<Mutex<Option<ParaMem>>> = LazyLock::new(|| Mutex::new(None));
 static FENCE_CACHE: LazyLock<Mutex<Option<FenceCache>>> = LazyLock::new(|| Mutex::new(None));
 
-fn heading_fg(lv: usize) -> Color32 {
-    match lv {
-        1 => Color32::from_rgb(0x1D, 0x4E, 0xD8),
-        2 => Color32::from_rgb(0x6D, 0x28, 0xD9),
-        3 => Color32::from_rgb(0x0F, 0x76, 0x6E),
-        4 => Color32::from_rgb(0xC2, 0x41, 0x0C),
-        5 => Color32::from_rgb(0xBE, 0x18, 0x5D),
-        _ => Color32::from_rgb(0x47, 0x55, 0x69),
-    }
+fn heading_fg(_lv: usize) -> Color32 {
+    BODY
 }
 
 fn heading_mark(lv: usize) -> Color32 {
