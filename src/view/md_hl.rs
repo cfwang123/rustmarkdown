@@ -391,8 +391,9 @@ fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
     Some(row)
 }
 
-/// egui 拖选会 `Arc::make_mut` 每一行网格。缓存的行是共享的，长选区每帧复制整篇会卡数秒。
-/// 只给光标附近行保留实网格，其余选中行换成无网格副本（字数/行高仍对，光标不错位）。
+/// egui 拖选会 `Arc::make_mut` 每一行网格并把字形改成选区色。
+/// 按段缓存的行是共享的，若不先拆开，上一行/未选中的相同段会一起变色。
+/// 长选区只给光标附近行保留实网格，其余换成无网格副本（字数/行高仍对）。
 fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
     let id = ui.make_persistent_id(EDITOR_ID_SALT);
     let Some(state) = egui::TextEdit::load_state(ui.ctx(), id) else {
@@ -412,24 +413,23 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
     let keep = galley.layout_from_cursor(range.primary).row;
     let keep_lo = keep.saturating_sub(SEL_KEEP_ROWS);
     let keep_hi = keep.saturating_add(SEL_KEEP_ROWS);
-    if hi.saturating_sub(lo) <= SEL_KEEP_ROWS * 2 {
-        return galley;
-    }
-    let Some(dummy) = dummy_row(ui) else {
-        return galley;
-    };
+    let long = hi.saturating_sub(lo) > SEL_KEEP_ROWS * 2;
+    let dummy = if long { dummy_row(ui) } else { None };
     let mut g = (*galley).clone();
-    for ri in lo..=hi.min(g.rows.len().saturating_sub(1)) {
-        if ri >= keep_lo && ri <= keep_hi {
-            continue;
+    let last = g.rows.len().saturating_sub(1);
+    for ri in lo..=hi.min(last) {
+        let hollow = long && dummy.is_some() && !(ri >= keep_lo && ri <= keep_hi);
+        if hollow {
+            let src = &g.rows[ri].row;
+            let mut row = (**dummy.as_ref().unwrap()).clone();
+            row.glyphs.clone_from(&src.glyphs);
+            row.size = src.size;
+            row.ends_with_newline = src.ends_with_newline;
+            row.visuals = RowVisuals::default();
+            g.rows[ri].row = Arc::new(row);
+        } else {
+            Arc::make_mut(&mut g.rows[ri].row);
         }
-        let src = &g.rows[ri].row;
-        let mut row = (*dummy).clone();
-        row.glyphs.clone_from(&src.glyphs);
-        row.size = src.size;
-        row.ends_with_newline = src.ends_with_newline;
-        row.visuals = RowVisuals::default();
-        g.rows[ri].row = Arc::new(row);
     }
     Arc::new(g)
 }
