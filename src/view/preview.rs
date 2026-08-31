@@ -248,9 +248,10 @@ pub fn show(
 ) {
     let mut ui = crate::view::pane_ui(ui);
     ui.painter().rect_filled(ui.max_rect(), 0.0, Color32::WHITE);
-    // 每帧重建可选文本片段清单（add_flow_text 里收集，供空白处拖选吸附用）。
+    // 每帧重建可选文本片段清单（add_flow_text 里收集，供空白处拖选用）。
+    // 注意类型必须与收集处一致：Vec<(Rect, String)>，否则清空不生效。
     ui.ctx()
-        .data_mut(|d| d.insert_temp(sel_labels_id(), Vec::<(egui::Id, Rect)>::new()));
+        .data_mut(|d| d.insert_temp(sel_labels_id(), Vec::<(Rect, String)>::new()));
     if ui.input(|i| i.pointer.primary_pressed()) {
         st.pick_lines = None;
         st.pick_anchor = None;
@@ -274,13 +275,6 @@ pub fn show(
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     let page_w = ui.available_width();
-                    // 先注册最底层的空白交互：点在文字/图片上时由后注册的控件接管，
-                    // 点在空白处时由它接管并锚定到最近的文本行，交给 egui 原生拖选。
-                    let sel_bg = ui.interact(
-                        ui.max_rect(),
-                        ui.id().with("blank_sel"),
-                        Sense::click_and_drag(),
-                    );
                     if doc.blocks.is_empty()
                         || doc.blocks.iter().all(|b| b.kind == MdBlockKind::Blank)
                     {
@@ -310,15 +304,30 @@ pub fn show(
                         dirty_hi,
                         !wrap_changed,
                     );
-                    // 空白处拖选：行级选区。点在文字上时原生选择接管（此处让位）。
+                    // 空白处拖选：行级选区。用自己的片段清单判断按下点是否在文字上——
+                    // 在文字上交给 egui 原生逐字选择，否则锚定行选区。
                     let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
                     let any_copy = ui
                         .input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
-                    if esc || (ui.input(|i| i.pointer.any_pressed()) && !sel_bg.drag_started()) {
+                    let pressed = ui.input(|i| i.pointer.any_pressed());
+                    let press_pos = ui.input(|i| i.pointer.interact_pos());
+                    if esc {
                         st.blank_sel = None;
-                    }
-                    if sel_bg.drag_started() {
-                        if let Some(p) = sel_bg.interact_pointer_pos() {
+                    } else if pressed {
+                        let labels = ui.ctx().data(|d| {
+                            d.get_temp::<Vec<(Rect, String)>>(sel_labels_id())
+                                .unwrap_or_default()
+                        });
+                        let on_text = press_pos
+                            .is_some_and(|p| labels.iter().any(|(r, _)| r.contains(p)));
+                        // TEMP-DEBUG: 空白拖选排查（用后即删）
+                        crate::io::log::write(&format!(
+                            "blankdbg press pos={press_pos:?} on_text={on_text} labels={}",
+                            labels.len()
+                        ));
+                        if on_text {
+                            st.blank_sel = None;
+                        } else if let Some(p) = press_pos {
                             st.blank_sel = Some(BlankSel {
                                 anchor_y: p.y,
                                 cur_y: p.y,
@@ -340,10 +349,12 @@ pub fn show(
                             st.blank_sel = Some(sel);
                         }
                         if (sel.cur_y - sel.anchor_y).abs() > 2.0 {
+                            // 拖动带两端各放宽容半行：锚点落在行间空隙时也能带上相邻行。
+                            const ROW_EXTEND: f32 = BASE_FS;
                             let (y0, y1) = if sel.anchor_y <= sel.cur_y {
-                                (sel.anchor_y, sel.cur_y)
+                                (sel.anchor_y - ROW_EXTEND, sel.cur_y + ROW_EXTEND)
                             } else {
-                                (sel.cur_y, sel.anchor_y)
+                                (sel.cur_y - ROW_EXTEND, sel.anchor_y + ROW_EXTEND)
                             };
                             let labels = ui.ctx().data_mut(|d| {
                                 d.get_temp::<Vec<(Rect, String)>>(sel_labels_id())
@@ -357,10 +368,9 @@ pub fn show(
                             let x0 = ui.max_rect().left();
                             let x1 = ui.max_rect().right();
                             for (r, _) in &covered {
-                                let top = r.top().max(y0);
-                                let bot = r.bottom().min(y1);
+                                // 整行高亮：不按拖动带裁剪，对齐文字编辑器的行选择。
                                 ui.painter().rect_filled(
-                                    Rect::from_min_max(pos2(x0, top), pos2(x1, bot)),
+                                    Rect::from_min_max(pos2(x0, r.top()), pos2(x1, r.bottom())),
                                     0.0,
                                     SEL_BG,
                                 );
