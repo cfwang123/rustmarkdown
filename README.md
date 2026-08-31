@@ -52,6 +52,7 @@ Implemented:
 - **DOC / DOCX read-only** (aligned with docview): convert to Markdown and paginate as A4 portrait (gray canvas, white pages, 12 px gap); Ctrl+wheel / Ctrl++- / Ctrl+0 zoom (1.0 = A4 100%); PgUp/PgDn page, arrows scroll; outline jump; original file is not edited; Save As can export `.md`
 - **PDF read-only** (aligned with docview continuous pages): pdfium raster per page, stacked vertically; open at 100%; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; PgUp/PgDn page, arrows scroll; text select is Sumatra-style yellow highlight; Ctrl+C / right-click copy selected text; outline is a page list; double-click zoom, right-click copy image
 - **Image file read-only** (aligned with docview ImageViewer): png / jpg / jpeg / gif / bmp / ico / tif / tiff / webp; open contain-fit to the window; wheel zoom (cursor-centered), pan; double-click toggles fit ⇄ 100%; `[` / `]` rotate 90°; Ctrl+C / right-click copy image or as file; Save As png/jpg/bmp; does not overwrite the original
+- Vim-encrypted Markdown: zip (`VimCrypt~01!`), blowfish (`02!`) and blowfish2 (`03!`); password prompt on open; save writes back with the original method. xchacha20 is not supported. Password stays in memory only.
 - `node pack.js` builds Release and writes `release/rustmarkdown_x.x.x.7z`
 
 Later: light/dark theme, UI zoom, per-window session restore.

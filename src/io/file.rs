@@ -249,7 +249,7 @@ pub fn write_text(path: &Path, text: &str, newline: Newline, enc: &TextEnc) -> R
     write_bytes_atomic(path, &bytes)
 }
 
-/// 写回 Vim 加密文件：编码后的明文以原 salt/seed 用 blowfish2 加密。
+/// 写回 Vim 加密文件：编码后的明文按原 method / salt / seed 加密。
 pub fn write_vimcrypt(
     path: &Path,
     text: &str,

@@ -513,7 +513,7 @@ impl App {
             DocKind::Markdown => {
                 let bytes = file::read_bytes(&path)?;
                 if let Some(method) = crate::io::vimcrypt::header_method(&bytes) {
-                    if method != 3 {
+                    if !crate::io::vimcrypt::method_supported(method) {
                         self.dialog = Some(Dialog::Error(t().vim_unsupported_method.to_string()));
                         return Ok(());
                     }
