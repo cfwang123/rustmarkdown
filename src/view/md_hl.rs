@@ -2,6 +2,7 @@
 //! LayoutJob 文本必须与源码逐字节一致，否则 TextEdit 光标会错位。
 
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use egui::epaint::text::RowVisuals;
@@ -82,6 +83,11 @@ static CACHE: LazyLock<Mutex<Option<Cache>>> = LazyLock::new(|| Mutex::new(None)
 static GALLEY: LazyLock<Mutex<Vec<GalleyEntry>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static PARA: LazyLock<Mutex<Option<ParaMem>>> = LazyLock::new(|| Mutex::new(None));
 static FENCE_CACHE: LazyLock<Mutex<Option<FenceCache>>> = LazyLock::new(|| Mutex::new(None));
+/// 上一帧编辑区有选区或按着鼠标：本帧 layouter 早于 TextEdit 更新光标，仍须先掏空。
+static NEED_SEL_HOLLOW: AtomicBool = AtomicBool::new(false);
+/// 同一份缓存 Galley + 同一视口行集合，复用已掏空结果（空闲帧几乎零成本）。
+static HOLLOW_CACHE: LazyLock<Mutex<Option<(usize, Vec<usize>, usize, Arc<egui::Galley>)>>> =
+    LazyLock::new(|| Mutex::new(None));
 
 fn heading_fg(_lv: usize) -> Color32 {
     BODY
@@ -208,7 +214,7 @@ pub fn layout_galley(
         });
         galley
     };
-    hollow_offscreen_sel(ui, galley)
+    hollow_offscreen_sel(ui, galley, sticky_wrap)
 }
 
 fn hash_para_span(
@@ -419,6 +425,11 @@ pub fn editor_widget_id(ui: &egui::Ui) -> egui::Id {
     ui.make_persistent_id(egui::Id::new(EDITOR_ID_SALT))
 }
 
+/// 编辑区本帧画完后调用：有选区或按着主键时，下一帧 layouter 仍须掏空网格。
+pub fn note_sel_paint(need: bool) {
+    NEED_SEL_HOLLOW.store(need, Ordering::Relaxed);
+}
+
 fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
     static DUMMY: LazyLock<Mutex<Option<Arc<egui::epaint::text::Row>>>> =
         LazyLock::new(|| Mutex::new(None));
@@ -437,8 +448,9 @@ fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
     Some(row)
 }
 
-/// 视口内行。超过 `VIS_KEEP_MAX` 视为 clip 失效（会把整篇当可见、拖选克隆网格卡数秒），改走光标附近。
-const VIS_KEEP_MAX: usize = 48;
+/// 视口内行上限。超过则截成顶部这么多行（clip 失效时避免把整篇当可见）。
+/// 4K 约 100 行可见，48 会把最大化窗口判成失效，视口字被掏空。
+const VIS_KEEP_MAX: usize = 160;
 
 fn vis_rows_capped(galley: &egui::Galley, origin_y: f32, clip: Rect) -> Vec<usize> {
     let mut out = Vec::new();
@@ -451,7 +463,8 @@ fn vis_rows_capped(galley: &egui::Galley, origin_y: f32, clip: Rect) -> Vec<usiz
         if y1 >= clip.top() - 40.0 && y0 <= clip.bottom() + 40.0 {
             out.push(ri);
             if out.len() > VIS_KEEP_MAX {
-                return Vec::new();
+                out.truncate(VIS_KEEP_MAX);
+                break;
             }
         }
     }
@@ -526,14 +539,20 @@ pub(crate) fn apply_sel_hollow(
     (Arc::new(g), n_keep, n_hollow)
 }
 
-/// egui 拖选会 `Arc::make_mut` 每一行网格并把字形改成选区色。
-/// 排版在 TextEdit 更新光标之前；按住鼠标时必须按整篇掏空，否则本帧新选中的行仍会复制网格。
-fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
+/// egui 拖选会 `Arc::make_mut` 整份 Galley 再 `make_mut` 每一行网格。
+/// 排版在 TextEdit 更新光标之前：若仍返回缓存里带网格的共享 Arc，选区画会把约 2500 行网格深拷贝约 2 秒。
+/// 行数超过视口上限时每帧都掏空视口外网格（不依赖本帧是否已有选区）；同一份缓存 Arc 复用结果。
+fn hollow_offscreen_sel(
+    ui: &egui::Ui,
+    galley: Arc<egui::Galley>,
+    pointer_down: bool,
+) -> Arc<egui::Galley> {
     let t0 = std::time::Instant::now();
     let last = galley.rows.len().saturating_sub(1);
     if last == 0 {
         return galley;
     }
+    let large = last > VIS_KEEP_MAX;
     let id = editor_widget_id(ui);
     let state = egui::TextEdit::load_state(ui.ctx(), id);
     let range = state.as_ref().and_then(|s| s.cursor.char_range());
@@ -545,7 +564,8 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
             i.modifiers.shift && i.pointer.primary_pressed(),
         )
     });
-    let expanding = sel_all || dragging || shift_click;
+    let prev = NEED_SEL_HOLLOW.load(Ordering::Relaxed);
+    let expanding = sel_all || dragging || pointer_down || shift_click;
     let mut caret = 0usize;
     let mut sel_lo = 0usize;
     let mut sel_hi = 0usize;
@@ -562,13 +582,23 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
     } else if let Some(range) = range {
         caret = galley.layout_from_cursor(range.primary).row;
     }
-    if !expanding && !has_sel {
+    let need = expanding || has_sel || prev || large;
+    if !need {
         return galley;
     }
     let Some(dummy) = dummy_row(ui) else {
         return galley;
     };
     let vis = vis_rows_capped(&galley, ui.cursor().top(), ui.clip_rect());
+    let src_ptr = Arc::as_ptr(&galley) as usize;
+    {
+        let cache = HOLLOW_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((p, v, c, out)) = cache.as_ref() {
+            if *p == src_ptr && *v == vis && *c == caret {
+                return out.clone();
+            }
+        }
+    }
     let (out, n_keep, n_hollow) = apply_sel_hollow(
         galley,
         dummy.as_ref(),
@@ -576,16 +606,20 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
         sel_lo,
         sel_hi,
         &vis,
-        expanding || has_sel,
+        expanding || has_sel || prev || large,
     );
+    {
+        let mut cache = HOLLOW_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        *cache = Some((src_ptr, vis.clone(), caret, out.clone()));
+    }
     crate::io::log::slow(
         &format!(
-            "hollow keep={n_keep} hollow={n_hollow} vis={} galley_rows={} drag={dragging} sel_all={sel_all}",
+            "hollow keep={n_keep} hollow={n_hollow} vis={} galley_rows={} drag={dragging} sel_all={sel_all} prev={prev} large={large}",
             vis.len(),
             out.rows.len()
         ),
         t0,
-        5.0,
+        20.0,
     );
     out
 }
@@ -2181,6 +2215,36 @@ mod tests {
             assert!(
                 paint_ms < 150.0,
                 "模拟选区画太慢: {paint_ms:.0}ms（应已掏空网格）"
+            );
+        });
+    }
+
+    #[test]
+    fn layout_galley_large_hollow_without_sel() {
+        let path = r"D:\VS_Projects\公司文档\工作日清表\工作动态\2026年.md";
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读 2026年.md 失败: {e} ({path})"));
+        with_ui(|ui| {
+            let galley = layout_galley(ui, &text, 720.0, false);
+            let n_rows = galley.rows.len();
+            assert!(n_rows > 2000, "行数太少: {n_rows}");
+            let n_mesh = galley
+                .rows
+                .iter()
+                .filter(|r| !r.row.visuals.mesh.vertices.is_empty())
+                .count();
+            assert!(
+                n_mesh <= 160 + 8 * 2 + 4,
+                "无选区时仍带着整篇网格: mesh_rows={n_mesh}/{n_rows}"
+            );
+            let mut painted = galley;
+            let t_paint = std::time::Instant::now();
+            paint_sel_like(&mut painted);
+            let paint_ms = t_paint.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("2026年.md 无选区掏空后 paint={paint_ms:.0}ms mesh_rows={n_mesh}/{n_rows}");
+            assert!(
+                paint_ms < 150.0,
+                "共享 Galley 未掏空导致选区画太慢: {paint_ms:.0}ms mesh_rows={n_mesh}"
             );
         });
     }

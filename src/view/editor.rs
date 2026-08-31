@@ -152,6 +152,7 @@ pub fn show(
                 out.top_line = char_index_to_line(text, cc.index);
                 out.cursor_line = out.top_line;
             }
+            crate::view::md_hl::note_sel_paint(out.sel_chars > 0 || sticky);
             if pinned.is_none() {
                 split_text_undo(
                     ui,
