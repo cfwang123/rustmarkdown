@@ -459,6 +459,20 @@ impl App {
         Ok(())
     }
 
+    fn open_tab_as_workspace(&mut self, idx: usize) {
+        let Some(path) = self.win().tabs.get(idx).and_then(|t| t.doc.path.clone()) else {
+            self.status = "未保存的标签没有父目录".to_string();
+            return;
+        };
+        let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) else {
+            self.status = "无法取得父目录".to_string();
+            return;
+        };
+        if let Err(e) = self.open_folder(dir) {
+            self.status = e;
+        }
+    }
+
     fn open_path(&mut self, win_i: usize, path: &Path) -> Result<(), String> {
         let path = path.to_path_buf();
         if let Some((wi, ti)) = self.find_open(&path) {
@@ -1506,6 +1520,7 @@ impl App {
                     }
                 }
                 TabBarEvent::TearOff(i) => self.tear_off(i, None),
+                TabBarEvent::OpenAsWorkspace(i) => self.open_tab_as_workspace(i),
                 TabBarEvent::DragStart { idx, grab } => {
                     if self.tab_drag.is_none() {
                         if let Some(tab) = self.win().tabs.get(idx) {

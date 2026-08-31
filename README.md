@@ -38,7 +38,7 @@ Implemented:
 - Left sidebar (F4): Explorer folder tree (lazy load; click selects the row, no text drag) + Outline; filter, scroll highlight, click to jump; width and on/off in settings.json
 - Ctrl+F find: case-insensitive; F3 / Shift+F3 next/prev; highlight in source and preview
 - Encoding auto-detect (UTF-8 / GBK / UTF-16, …); save in original encoding; watch external changes and prompt reload
-- Tab drag aligned with docview: reorder in-bar; tearing off the bar immediately creates a new window that follows the cursor; drop on another window’s tab bar to merge; context menu “Move to new window”. Cannot tear off when there is only one tab
+- Tab drag aligned with docview: reorder in-bar; tearing off the bar immediately creates a new window that follows the cursor; drop on another window’s tab bar to merge; context menu “Open as workspace” (file’s parent folder in the left sidebar) and “Move to new window”. Cannot tear off when there is only one tab
 - File menu “Recent files”: last 20 paths, in `%LocalAppData%\rustmarkdown\settings.json`
 - Side-by-side synced scroll (wheel / scrollbar; 650 ms suppress after programmatic scroll)
 - Side-by-side: blue bar on the block under the caret; status bar shows “N selected” when the editor has a selection

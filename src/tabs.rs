@@ -7,6 +7,7 @@ pub enum TabBarEvent {
     Close(usize),
     Reorder { from: usize, to: usize },
     TearOff(usize),
+    OpenAsWorkspace(usize),
     DragStart { idx: usize, grab: Vec2 },
 }
 
@@ -82,6 +83,19 @@ pub fn show(
                         event = Some(TabBarEvent::DragStart { idx: i, grab });
                     }
                     r.context_menu(|ui| {
+                        let has_dir = tab
+                            .doc
+                            .path
+                            .as_ref()
+                            .and_then(|p| p.parent())
+                            .is_some_and(|d| !d.as_os_str().is_empty());
+                        if ui
+                            .add_enabled(has_dir, egui::Button::new("打开为工作目录"))
+                            .clicked()
+                        {
+                            event = Some(TabBarEvent::OpenAsWorkspace(i));
+                            ui.close();
+                        }
                         if ui.button("移到新窗口").clicked() {
                             event = Some(TabBarEvent::TearOff(i));
                             ui.close();
