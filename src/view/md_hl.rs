@@ -448,7 +448,7 @@ fn row_in_clip(origin_y: f32, clip: Rect, row: &egui::Galley, ri: usize, pad: f3
 
 /// egui 拖选会 `Arc::make_mut` 每一行网格并把字形改成选区色。
 /// 排版在 TextEdit 更新光标之前，且 `.id_salt` 必须用 `Id::new` 才能读到上次选区。
-/// 拖选 / Ctrl+A / 已有长选区：视口外行掏空网格，避免首帧复制整篇。
+/// 视口外只丢掉网格、**保留字形**（光标 / Ctrl+A 按字形计列）；清空字形会导致选不中。
 fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
     let t0 = std::time::Instant::now();
     let last = galley.rows.len().saturating_sub(1);
@@ -515,8 +515,11 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
         let mut row = (*dummy).clone();
         row.size = src.size;
         row.ends_with_newline = src.ends_with_newline;
-        row.glyphs.clear();
+        row.glyphs = src.glyphs.clone();
         row.visuals = RowVisuals::default();
+        for glyph in &mut row.glyphs {
+            glyph.first_vertex = 0;
+        }
         g.rows[ri].row = Arc::new(row);
         n_hollow += 1;
     }
