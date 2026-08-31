@@ -315,7 +315,12 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
         } else if hit.secondary {
             ws.selected = Some(ent.path.clone());
         }
-        if hit.resp.hovered() || hit.resp.secondary_clicked() {
+        // 菜单打开后必须每帧继续挂上：鼠标移向菜单后行不再 hovered，
+        // 若只在 hover/右键帧调用，egui 会立刻关掉弹出层。
+        if hit.resp.hovered()
+            || hit.resp.secondary_clicked()
+            || hit.resp.context_menu_opened()
+        {
             hit.resp.context_menu(|ui| {
                 if ent.is_dir && ui.button("设为工作目录").clicked() {
                     if ws.navigate(ent.path.clone()) {
@@ -444,7 +449,7 @@ fn tree_row(
     ui.painter()
         .with_clip_rect(clip)
         .galley(text_pos, galley, color);
-    if resp.hovered() {
+    if resp.hovered() && !resp.context_menu_opened() {
         resp = resp.on_hover_text(path.display().to_string());
     }
     RowHit {
