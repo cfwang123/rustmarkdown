@@ -437,13 +437,25 @@ fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
     Some(row)
 }
 
-fn row_in_clip(origin_y: f32, clip: Rect, row: &egui::Galley, ri: usize, pad: f32) -> bool {
-    let Some(r) = row.rows.get(ri) else {
-        return false;
-    };
-    let y0 = origin_y + r.pos.y;
-    let y1 = y0 + r.size.y.max(1.0);
-    y1 >= clip.top() - pad && y0 <= clip.bottom() + pad
+/// 视口内行。超过 `VIS_KEEP_MAX` 视为 clip 失效（会把整篇当可见、拖选克隆网格卡数秒），改走光标附近。
+const VIS_KEEP_MAX: usize = 48;
+
+fn vis_rows_capped(galley: &egui::Galley, origin_y: f32, clip: Rect) -> Vec<usize> {
+    let mut out = Vec::new();
+    if !clip.is_finite() || clip.height() > 4000.0 {
+        return out;
+    }
+    for (ri, r) in galley.rows.iter().enumerate() {
+        let y0 = origin_y + r.pos.y;
+        let y1 = y0 + r.size.y.max(1.0);
+        if y1 >= clip.top() - 40.0 && y0 <= clip.bottom() + 40.0 {
+            out.push(ri);
+            if out.len() > VIS_KEEP_MAX {
+                return Vec::new();
+            }
+        }
+    }
+    out
 }
 
 /// 从缓存拆出一行：保留网格和字形，但让 `paint_text_selection` 改不成字色
@@ -472,9 +484,50 @@ fn hollow_row(
     row
 }
 
+/// 只给光标附近 / 视口（有上限）/ 选区首尾行保留实网格；其余丢掉网格、保留字形。
+/// `all_rows`：Ctrl+A 或按住鼠标，本帧选区可能比上次大，必须处理每一行。
+pub(crate) fn apply_sel_hollow(
+    galley: Arc<egui::Galley>,
+    dummy: &egui::epaint::text::Row,
+    caret_row: usize,
+    sel_lo: usize,
+    sel_hi: usize,
+    vis: &[usize],
+    all_rows: bool,
+) -> (Arc<egui::Galley>, usize, usize) {
+    let last = galley.rows.len().saturating_sub(1);
+    if last == 0 {
+        return (galley, 0, 0);
+    }
+    let keep_lo = caret_row.saturating_sub(SEL_KEEP_ROWS);
+    let keep_hi = caret_row.saturating_add(SEL_KEEP_ROWS).min(last);
+    let sel_lo = sel_lo.min(last);
+    let sel_hi = sel_hi.min(last);
+    let (lo, hi) = if all_rows {
+        (0, last)
+    } else {
+        (sel_lo, sel_hi)
+    };
+    let mut g = (*galley).clone();
+    let mut n_keep = 0usize;
+    let mut n_hollow = 0usize;
+    for ri in lo..=hi {
+        let near = ri >= keep_lo && ri <= keep_hi;
+        let at_end = ri == sel_lo || ri == sel_hi;
+        let in_vis = vis.binary_search(&ri).is_ok();
+        if near || at_end || in_vis {
+            g.rows[ri].row = Arc::new(detach_row_keep_glyphs(&g.rows[ri].row));
+            n_keep += 1;
+        } else {
+            g.rows[ri].row = Arc::new(hollow_row(dummy, &g.rows[ri].row));
+            n_hollow += 1;
+        }
+    }
+    (Arc::new(g), n_keep, n_hollow)
+}
+
 /// egui 拖选会 `Arc::make_mut` 每一行网格并把字形改成选区色。
-/// 排版在 TextEdit 更新光标之前，且 `.id_salt` 必须用 `Id::new` 才能读到上次选区。
-/// 视口外丢掉网格（保留字形，否则光标/Ctrl+A 错位）；视口内从缓存拆开且禁止改字色，避免开头一小段串色。
+/// 排版在 TextEdit 更新光标之前；按住鼠标时必须按整篇掏空，否则本帧新选中的行仍会复制网格。
 fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
     let t0 = std::time::Instant::now();
     let last = galley.rows.len().saturating_sub(1);
@@ -484,7 +537,7 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
     let id = editor_widget_id(ui);
     let state = egui::TextEdit::load_state(ui.ctx(), id);
     let range = state.as_ref().and_then(|s| s.cursor.char_range());
-    let (sel_all, dragging, shift_click) = ui.input(|i| {
+    let (sel_all, dragging, shift_click) = ui.ctx().input(|i| {
         let cmd = i.modifiers.command || i.modifiers.ctrl;
         (
             cmd && i.key_pressed(egui::Key::A),
@@ -493,7 +546,7 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
         )
     });
     let expanding = sel_all || dragging || shift_click;
-    let mut keep = 0usize;
+    let mut caret = 0usize;
     let mut sel_lo = 0usize;
     let mut sel_hi = 0usize;
     let mut has_sel = false;
@@ -504,61 +557,37 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
         if sel_lo > sel_hi {
             std::mem::swap(&mut sel_lo, &mut sel_hi);
         }
-        keep = galley.layout_from_cursor(range.primary).row;
+        caret = galley.layout_from_cursor(range.primary).row;
         has_sel = true;
     } else if let Some(range) = range {
-        keep = galley.layout_from_cursor(range.primary).row;
+        caret = galley.layout_from_cursor(range.primary).row;
     }
-    let mut lo = sel_lo;
-    let mut hi = sel_hi;
-    if expanding {
-        lo = 0;
-        hi = last;
-    } else if !has_sel {
+    if !expanding && !has_sel {
         return galley;
-    }
-    hi = hi.min(last);
-    let span = hi.saturating_sub(lo);
-    if span <= 2 && !expanding {
-        let mut g = (*galley).clone();
-        for ri in lo..=hi {
-            let row = detach_row_keep_glyphs(&g.rows[ri].row);
-            g.rows[ri].row = Arc::new(row);
-        }
-        return Arc::new(g);
     }
     let Some(dummy) = dummy_row(ui) else {
         return galley;
     };
-    let origin_y = ui.cursor().top();
-    let clip = ui.clip_rect();
-    let keep_lo = keep.saturating_sub(SEL_KEEP_ROWS);
-    let keep_hi = keep.saturating_add(SEL_KEEP_ROWS);
-    let mut g = (*galley).clone();
-    let mut n_hollow = 0usize;
-    let mut n_keep = 0usize;
-    for ri in lo..=hi {
-        let near = ri >= keep_lo && ri <= keep_hi;
-        let vis = row_in_clip(origin_y, clip, &g, ri, 80.0);
-        let at_sel_end = has_sel && (ri == sel_lo || ri == sel_hi);
-        if near || vis || at_sel_end {
-            let row = detach_row_keep_glyphs(&g.rows[ri].row);
-            g.rows[ri].row = Arc::new(row);
-            n_keep += 1;
-            continue;
-        }
-        g.rows[ri].row = Arc::new(hollow_row(dummy.as_ref(), &g.rows[ri].row));
-        n_hollow += 1;
-    }
+    let vis = vis_rows_capped(&galley, ui.cursor().top(), ui.clip_rect());
+    let (out, n_keep, n_hollow) = apply_sel_hollow(
+        galley,
+        dummy.as_ref(),
+        caret,
+        sel_lo,
+        sel_hi,
+        &vis,
+        expanding || has_sel,
+    );
     crate::io::log::slow(
         &format!(
-            "hollow span={span} keep={n_keep} hollow={n_hollow} galley_rows={} drag={dragging} sel_all={sel_all}",
-            g.rows.len()
+            "hollow keep={n_keep} hollow={n_hollow} vis={} galley_rows={} drag={dragging} sel_all={sel_all}",
+            vis.len(),
+            out.rows.len()
         ),
         t0,
-        crate::io::log::SPAN_MS,
+        5.0,
     );
-    Arc::new(g)
+    out
 }
 
 /// 查找命中与预览映射底色：叠在已排版行上，避免为此重排整篇。
@@ -2059,5 +2088,100 @@ mod tests {
         assert_eq!(done_upper.format.background, TASK_DONE_BG);
         assert_ne!(open.format.color, done.format.color);
         assert_ne!(open.format.background, done.format.background);
+    }
+
+    fn with_ui(f: impl FnOnce(&mut egui::Ui)) {
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(Rect::from_min_size(
+            pos2(0.0, 0.0),
+            egui::vec2(1280.0, 800.0),
+        ));
+        let mut f = Some(f);
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                if let Some(f) = f.take() {
+                    f(ui);
+                }
+            });
+        });
+    }
+
+    fn paint_sel_like(galley: &mut Arc<egui::Galley>) {
+        let g = Arc::make_mut(galley);
+        for placed in &mut g.rows {
+            let row = Arc::make_mut(&mut placed.row);
+            let mesh = &mut row.visuals.mesh;
+            if !row.glyphs.is_empty() {
+                let a = row
+                    .glyphs
+                    .first()
+                    .map(|x| x.first_vertex as usize)
+                    .unwrap_or(0);
+                let b = row
+                    .glyphs
+                    .last()
+                    .map(|x| x.first_vertex as usize)
+                    .unwrap_or(0);
+                let end = b.min(mesh.vertices.len());
+                let start = a.min(end);
+                for v in &mut mesh.vertices[start..end] {
+                    v.color = Color32::WHITE;
+                }
+            }
+            mesh.add_colored_rect(
+                Rect::from_min_size(pos2(0.0, 0.0), row.size),
+                Color32::from_rgb(0x37, 0x80, 0xCE),
+            );
+        }
+    }
+
+    #[test]
+    fn sel_hollow_2026_md_under_150ms() {
+        let path = r"D:\VS_Projects\公司文档\工作日清表\工作动态\2026年.md";
+        let text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读 2026年.md 失败: {e} ({path})"));
+        assert!(
+            text.len() > 100_000,
+            "2026年.md 太短: {} bytes",
+            text.len()
+        );
+        with_ui(|ui| {
+            let t_layout = std::time::Instant::now();
+            let galley = layout_galley(ui, &text, 720.0, false);
+            let layout_ms = t_layout.elapsed().as_secs_f64() * 1000.0;
+            let n_rows = galley.rows.len();
+            assert!(n_rows > 2000, "行数太少: {n_rows}");
+            let chars_before = galley.end().index;
+            let dummy = dummy_row(ui).expect("dummy row");
+            let last = n_rows - 1;
+            let vis: Vec<usize> = (last.saturating_sub(30)..=last).collect();
+            let t_hollow = std::time::Instant::now();
+            let (out, n_keep, n_hollow) =
+                apply_sel_hollow(galley, dummy.as_ref(), last, 0, last, &vis, true);
+            let hollow_ms = t_hollow.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(out.end().index, chars_before, "掏空后光标总字数变了");
+            assert!(
+                n_keep <= 48 + 8 * 2 + 4,
+                "keep 太多: {n_keep}（会克隆整篇网格）"
+            );
+            assert!(n_hollow > 1000, "几乎没掏空: hollow={n_hollow}");
+            let mut painted = out;
+            let t_paint = std::time::Instant::now();
+            paint_sel_like(&mut painted);
+            let paint_ms = t_paint.elapsed().as_secs_f64() * 1000.0;
+            eprintln!(
+                "2026年.md layout={layout_ms:.0}ms hollow={hollow_ms:.0}ms paint={paint_ms:.0}ms rows={n_rows} keep={n_keep} hollow={n_hollow}"
+            );
+            assert!(
+                hollow_ms < 150.0,
+                "掏空太慢: {hollow_ms:.0}ms keep={n_keep} hollow={n_hollow}"
+            );
+            assert!(
+                paint_ms < 150.0,
+                "模拟选区画太慢: {paint_ms:.0}ms（应已掏空网格）"
+            );
+        });
     }
 }
