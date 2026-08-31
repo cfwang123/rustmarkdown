@@ -290,11 +290,11 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
                 ws.expanded.insert(ent.path.clone());
             }
             ws.selected = Some(ent.path.clone());
+        } else if hit.double_clicked && !ent.is_dir {
+            ws.selected = Some(ent.path.clone());
+            action = Some(ExplorerAction::Open(ent.path.clone()));
         } else if hit.clicked {
             ws.selected = Some(ent.path.clone());
-            if !ent.is_dir {
-                action = Some(ExplorerAction::Open(ent.path.clone()));
-            }
         } else if hit.secondary {
             ws.selected = Some(ent.path.clone());
         }
