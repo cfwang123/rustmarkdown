@@ -15,7 +15,7 @@ Implemented:
 - Multi-tab: open / close / switch / path de-dupe / drag reorder / middle-click close; long names are clipped
 - Menu bar (File / View / Tools / Help) and icon toolbar (hover shows name and shortcut)
 - Three modes (source, side-by-side, preview; resizable splitter)
-- Open, save, save as; prompt on unsaved close
+- Open, save, save as; prompt on unsaved close (undoing back to the last saved/opened text clears the dirty flag)
 - Drag-and-drop files / folders / `.lnk` (including CJK paths); folders load into the sidebar tree; missing paths fall back to a temp file; errors show a dialog; CLI paths. If an instance is already running, a new file opens as a tab in that window (no second process)
 - Markdown parse (GFM subset, source line numbers) and native preview (including nested inlines such as `**[link](url)**`)
 - Table column widths aligned with mdview: allocate by content width; short columns stay fixed, long columns share the remainder; no vertical CJK split on short empty columns
@@ -44,7 +44,7 @@ Implemented:
 - Side-by-side: blue bar on the block under the caret; status bar shows “N selected” when the editor has a selection
 - Status bar: mode / line count / encoding / tab width (no full path); open / switch / save toasts use the file name only
 - Cross-pane selection: selecting on the left highlights the matching preview text; dragging on the right highlights matching source
-- After Ctrl+Z / Ctrl+Y the caret stays at the change; the viewport does not jump to an older edit
+- After Ctrl+Z / Ctrl+Y the caret stays at the change; the viewport does not jump to an older edit; undoing back to the last saved/opened text marks the tab clean
 - Preview table right / center align: text is aligned, glyph order matches source (no RTL, so “斜体” does not become “体斜”)
 - Title bar shows the version (e.g. `demo.md — rustmarkdown v1.0.1`)
 - Back / forward (toolbar, View menu, Alt+← / Alt+→): outline clicks, `#anchors`, and in-doc relative Markdown links (cap 50)

@@ -1,4 +1,5 @@
 use eframe::egui;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -51,21 +52,31 @@ impl Default for Newline {
     }
 }
 
+fn content_hash(s: &str) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
 /// 单文档会话。
 pub struct DocSession {
     pub path: Option<PathBuf>,
     pub text: String,
     pub dirty: bool,
+    /// 上次打开/保存时的正文哈希；撤销回原文时清 dirty。
+    pub saved_hash: u64,
     pub newline: Newline,
     pub enc: crate::io::file::TextEnc,
 }
 
 impl DocSession {
     pub fn untitled(text: String) -> Self {
+        let saved_hash = content_hash(&text);
         Self {
             path: None,
             text,
             dirty: false,
+            saved_hash,
             newline: Newline::default(),
             enc: crate::io::file::TextEnc::utf8(false),
         }
@@ -77,13 +88,24 @@ impl DocSession {
         newline: Newline,
         enc: crate::io::file::TextEnc,
     ) -> Self {
+        let saved_hash = content_hash(&text);
         Self {
             path: Some(path),
             text,
             dirty: false,
+            saved_hash,
             newline,
             enc,
         }
+    }
+
+    pub fn mark_clean(&mut self) {
+        self.saved_hash = content_hash(&self.text);
+        self.dirty = false;
+    }
+
+    pub fn sync_dirty(&mut self) {
+        self.dirty = content_hash(&self.text) != self.saved_hash;
     }
 
     pub fn display_name(&self) -> String {
@@ -194,7 +216,7 @@ impl Tab {
         if self.is_readonly() {
             return;
         }
-        self.doc.dirty = true;
+        self.doc.sync_dirty();
         self.reparse_at = Some(Instant::now() + Duration::from_millis(180));
     }
 
@@ -363,4 +385,37 @@ impl Tab {
 
 pub fn norm_path(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DocSession;
+
+    #[test]
+    fn undo_to_saved_clears_dirty() {
+        let mut d = DocSession::untitled("hello".into());
+        assert!(!d.dirty);
+        d.text.push('!');
+        d.sync_dirty();
+        assert!(d.dirty);
+        d.text.pop();
+        d.sync_dirty();
+        assert!(!d.dirty);
+    }
+
+    #[test]
+    fn save_then_edit_then_undo() {
+        let mut d = DocSession::untitled(String::new());
+        d.text.push_str("abc");
+        d.sync_dirty();
+        assert!(d.dirty);
+        d.mark_clean();
+        assert!(!d.dirty);
+        d.text.push('d');
+        d.sync_dirty();
+        assert!(d.dirty);
+        d.text.pop();
+        d.sync_dirty();
+        assert!(!d.dirty);
+    }
 }

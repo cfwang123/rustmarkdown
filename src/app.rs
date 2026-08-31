@@ -104,6 +104,7 @@ pub struct ClosedTab {
     pub newline: crate::doc::Newline,
     pub mode: ViewMode,
     pub dirty: bool,
+    pub saved_hash: u64,
     pub enc: crate::io::file::TextEnc,
 }
 
@@ -591,6 +592,7 @@ impl App {
             newline: tab.doc.newline,
             mode: tab.mode,
             dirty: tab.doc.dirty,
+            saved_hash: tab.doc.saved_hash,
             enc: tab.doc.enc,
         });
         if self.closed_stack.len() > 20 {
@@ -618,6 +620,7 @@ impl App {
             DocSession::untitled(c.text)
         };
         doc.dirty = c.dirty;
+        doc.saved_hash = c.saved_hash;
         doc.newline = c.newline;
         let mut tab = Tab::new(id, doc, c.mode, self.settings.md_tab_size);
         tab.last_edit_mode = if c.mode == ViewMode::Preview {
@@ -925,7 +928,7 @@ impl App {
         match file::write_text(&path, &tab.doc.text, tab.doc.newline, &tab.doc.enc) {
             Ok(()) => {
                 tab.doc.path = Some(path.clone());
-                tab.doc.dirty = false;
+                tab.doc.mark_clean();
                 if file::is_text_ext(&path) {
                     tab.kind = DocKind::Markdown;
                     tab.asset_dir = None;
@@ -3033,7 +3036,7 @@ impl App {
                     tab.doc.text = text;
                     tab.doc.newline = nl;
                     tab.doc.enc = enc;
-                    tab.doc.dirty = false;
+                    tab.doc.mark_clean();
                     tab.reparse(ts);
                     self.status = format!("已从磁盘重载 {}", file_label(&path));
                 }
