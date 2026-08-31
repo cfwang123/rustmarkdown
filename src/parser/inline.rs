@@ -200,8 +200,8 @@ pub fn parse_inlines(text: &str) -> Vec<MdSpan> {
     spans
 }
 
-/// 路径扫描在此类 ASCII 字符处打断（含表格竖线与括号）。
-const PATH_STOP_ASCII: &[u8] = b"()<>\"'`|[]{}";
+/// 路径扫描在此类 ASCII 字符处打断（含表格竖线、括号、URL 查询/片段）。
+const PATH_STOP_ASCII: &[u8] = b"()<>\"'`|[]{}?#";
 /// 全角标点同样打断扫描（中文正文里路径常用它们收尾）。
 const PATH_STOP_CJK: &str = "，、。；：！？（）《》「」『』【】";
 
@@ -213,6 +213,15 @@ const PATH_STOP_CJK: &str = "，、。；：！？（）《》「」『』【】
 fn try_fs_path(text: &str, i: usize) -> Option<(usize, String)> {
     let b = text.as_bytes();
     let n = text.len();
+    // `k://` / `ftp://` 是 URI scheme，不是盘符；裸 URL 只认 http/https。
+    if i + 3 < n
+        && b[i].is_ascii_alphabetic()
+        && b[i + 1] == b':'
+        && b[i + 2] == b'/'
+        && b[i + 3] == b'/'
+    {
+        return None;
+    }
     let is_drive = b[i].is_ascii_alphabetic()
         && i + 2 < n
         && b[i + 1] == b':'
@@ -511,6 +520,32 @@ mod tests {
         let ls = links("访问 https://example.com/a.md 之后");
         assert_eq!(ls.len(), 1);
         assert_eq!(ls[0].0, "https://example.com/a.md");
+        let ls = links("http://example.com/a");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].0, "http://example.com/a");
+    }
+
+    #[test]
+    fn non_http_scheme_not_url() {
+        assert!(links("k://423900778/r?password=Fengmai2014").is_empty());
+        assert!(links("rustdes k://423900778/r?password=Fengmai2014").is_empty());
+        assert!(
+            links("ftp://example.com/x")
+                .iter()
+                .all(|(h, _)| !h.contains("ftp:"))
+        );
+        assert!(
+            links("file://host/a")
+                .iter()
+                .all(|(h, _)| !h.starts_with("file:"))
+        );
+    }
+
+    #[test]
+    fn drive_forward_slash_still_path() {
+        let ls = links("D:/a/b.md");
+        assert_eq!(ls.len(), 1);
+        assert_eq!(ls[0].0, "D:/a/b.md");
     }
 
     #[test]
