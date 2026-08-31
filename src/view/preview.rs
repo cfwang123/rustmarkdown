@@ -236,6 +236,9 @@ pub fn show(
 ) {
     let mut ui = crate::view::pane_ui(ui);
     ui.painter().rect_filled(ui.max_rect(), 0.0, Color32::WHITE);
+    // 每帧重建可选文本片段清单（add_flow_text 里收集，供空白处拖选吸附用）。
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(sel_labels_id(), Vec::<(egui::Id, Rect)>::new()));
     if ui.input(|i| i.pointer.primary_pressed()) {
         st.pick_lines = None;
         st.pick_anchor = None;
@@ -259,6 +262,13 @@ pub fn show(
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     let page_w = ui.available_width();
+                    // 先注册最底层的空白交互：点在文字/图片上时由后注册的控件接管，
+                    // 点在空白处时由它接管并锚定到最近的文本行，交给 egui 原生拖选。
+                    let sel_bg = ui.interact(
+                        ui.max_rect(),
+                        ui.id().with("blank_sel"),
+                        Sense::click_and_drag(),
+                    );
                     if doc.blocks.is_empty()
                         || doc.blocks.iter().all(|b| b.kind == MdBlockKind::Blank)
                     {
@@ -288,6 +298,25 @@ pub fn show(
                         dirty_hi,
                         !wrap_changed,
                     );
+                    if sel_bg.drag_started() {
+                        if let Some(pos) = sel_bg.interact_pointer_pos() {
+                            let labels = ui.ctx().data_mut(|d| {
+                                d.get_temp::<Vec<(egui::Id, Rect)>>(sel_labels_id())
+                                    .unwrap_or_default()
+                            });
+                            if let Some(target) = snap_blank_press(&labels, pos) {
+                                // 合成一次「行尾/行首按下」：让 egui 的文字选择从最近的文本行开始。
+                                ui.ctx().input_mut(|i| {
+                                    i.events.push(egui::Event::PointerButton {
+                                        pos: target,
+                                        button: egui::PointerButton::Primary,
+                                        pressed: true,
+                                        modifiers: Default::default(),
+                                    });
+                                });
+                            }
+                        }
+                    }
                     st.top_line = 0;
                     for (i, b) in doc.blocks.iter().enumerate() {
                         if i < st.block_tops.len() && st.block_tops[i] <= st.viewport_top + 12.0 {
@@ -1586,6 +1615,83 @@ fn maybe_break_word(ui: &mut Ui, rt: &RichText) {
     }
 }
 
+/// 预览可选文本片段矩形清单的临时存储键（每帧由 show 清空重建）。
+fn sel_labels_id() -> egui::Id {
+    egui::Id::new("preview_sel_labels")
+}
+
+/// 空白处按下吸附：取垂直方向最近的文本行，右侧 → 行尾片段右缘，左侧 → 行首片段左缘。
+fn snap_blank_press(labels: &[(egui::Id, Rect)], pos: egui::Pos2) -> Option<egui::Pos2> {
+    if labels.is_empty() {
+        return None;
+    }
+    let mut line: Vec<&Rect> = labels
+        .iter()
+        .map(|(_, r)| r)
+        .filter(|r| r.top() <= pos.y && pos.y <= r.bottom())
+        .collect();
+    if line.is_empty() {
+        let nearest = labels
+            .iter()
+            .map(|(_, r)| r)
+            .min_by(|a, b| {
+                let da = if pos.y < a.top() {
+                    a.top() - pos.y
+                } else {
+                    pos.y - a.bottom()
+                };
+                let db = if pos.y < b.top() {
+                    b.top() - pos.y
+                } else {
+                    pos.y - b.bottom()
+                };
+                da.total_cmp(&db)
+            })?;
+        let band = *nearest;
+        line = labels
+            .iter()
+            .map(|(_, r)| r)
+            .filter(|r| r.top() < band.bottom() && r.bottom() > band.top())
+            .collect();
+    }
+    let min_left = line.iter().map(|r| r.left()).fold(f32::INFINITY, f32::min);
+    let max_right = line
+        .iter()
+        .map(|r| r.right())
+        .fold(f32::NEG_INFINITY, f32::max);
+    let pick = if pos.x >= max_right {
+        line.iter().copied().max_by(|a, b| a.right().total_cmp(&b.right()))
+    } else if pos.x <= min_left {
+        line.iter().copied().min_by(|a, b| a.left().total_cmp(&b.left()))
+    } else {
+        line.iter().copied().min_by(|a, b| {
+            let da = if pos.x < a.left() {
+                a.left() - pos.x
+            } else if pos.x > a.right() {
+                pos.x - a.right()
+            } else {
+                0.0
+            };
+            let db = if pos.x < b.left() {
+                b.left() - pos.x
+            } else if pos.x > b.right() {
+                pos.x - b.right()
+            } else {
+                0.0
+            };
+            da.total_cmp(&db)
+        })
+    }?;
+    let r = pick;
+    let y = pos.y.clamp(r.top() + 1.0, r.bottom() - 1.0);
+    let x = if pos.x < (r.left() + r.right()) * 0.5 {
+        r.left() + 2.0
+    } else {
+        r.right() - 2.0
+    };
+    Some(egui::pos2(x, y))
+}
+
 fn add_flow_text(
     ui: &mut Ui,
     text: &str,
@@ -1674,6 +1780,15 @@ fn add_flow_text(
             )
             .inner
         };
+        if sense.is_none() {
+            // 记录可选文本片段矩形：空白处拖选吸附用（每帧由 show 清空重建）。
+            ui.ctx().data_mut(|d| {
+                let list = d.get_temp::<Vec<(egui::Id, Rect)>>(sel_labels_id());
+                let mut list = list.unwrap_or_default();
+                list.push((r.id, r.rect));
+                d.insert_temp(sel_labels_id(), list);
+            });
+        }
         if r.clicked() {
             clicked = true;
         }
