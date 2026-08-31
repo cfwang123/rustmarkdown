@@ -70,9 +70,7 @@ impl Workspace {
     }
 
     fn load(&mut self, dir: &Path) {
-        if crate::io::log::enabled() {
-            crate::io::log::write(&format!("explorer.load {}", dir.display()));
-        }
+        let t0 = std::time::Instant::now();
         let mut ents = Vec::new();
         let rd = match std::fs::read_dir(dir) {
             Ok(r) => r,
@@ -99,7 +97,16 @@ impl Workspace {
             (false, true) => std::cmp::Ordering::Greater,
             _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
         });
+        let n = ents.len();
         self.children.insert(dir.to_path_buf(), ents);
+        if crate::io::log::enabled() {
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            crate::io::log::write(&format!(
+                "explorer.load {} n={} {ms:.0}ms",
+                dir.display(),
+                n
+            ));
+        }
     }
 
     fn children_of(&mut self, dir: &Path) -> &[FsEntry] {
@@ -452,9 +459,6 @@ fn tree_row(
 fn parent_dir(p: &Path) -> Option<PathBuf> {
     let parent = p.parent()?;
     if parent.as_os_str().is_empty() {
-        return None;
-    }
-    if !parent.is_dir() {
         return None;
     }
     Some(parent.to_path_buf())

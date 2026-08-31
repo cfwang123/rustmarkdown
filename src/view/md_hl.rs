@@ -64,7 +64,7 @@ const WRAP_QUANT: u32 = 8;
 /// 折行宽差在此内复用 Galley（滚动条显隐约 12–16px）。
 const WRAP_SLACK: u32 = 64;
 /// 光标附近保留实网格的行数（上下各这么多），其余选中行掏空网格以免拖选复制整篇。
-const SEL_KEEP_ROWS: usize = 64;
+const SEL_KEEP_ROWS: usize = 8;
 
 struct FenceCache {
     hash: u64,
@@ -410,8 +410,9 @@ fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
 
 /// egui 拖选会 `Arc::make_mut` 每一行网格并把字形改成选区色。
 /// 按段缓存的行是共享的，若不先拆开，上一行/未选中的相同段会一起变色。
-/// 长选区只给光标附近行保留实网格，其余换成无网格副本（字数/行高仍对）。
+/// 选区中间行掏空网格（保留行高）；只给光标附近和选区首尾行保留实网格。
 fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::Galley> {
+    let t0 = std::time::Instant::now();
     let id = ui.make_persistent_id(EDITOR_ID_SALT);
     let Some(state) = egui::TextEdit::load_state(ui.ctx(), id) else {
         return galley;
@@ -430,24 +431,52 @@ fn hollow_offscreen_sel(ui: &egui::Ui, galley: Arc<egui::Galley>) -> Arc<egui::G
     let keep = galley.layout_from_cursor(range.primary).row;
     let keep_lo = keep.saturating_sub(SEL_KEEP_ROWS);
     let keep_hi = keep.saturating_add(SEL_KEEP_ROWS);
-    let long = hi.saturating_sub(lo) > SEL_KEEP_ROWS * 2;
-    let dummy = if long { dummy_row(ui) } else { None };
-    let mut g = (*galley).clone();
-    let last = g.rows.len().saturating_sub(1);
-    for ri in lo..=hi.min(last) {
-        let hollow = long && dummy.is_some() && !(ri >= keep_lo && ri <= keep_hi);
-        if hollow {
-            let src = &g.rows[ri].row;
-            let mut row = (**dummy.as_ref().unwrap()).clone();
-            row.glyphs.clone_from(&src.glyphs);
-            row.size = src.size;
-            row.ends_with_newline = src.ends_with_newline;
-            row.visuals = RowVisuals::default();
-            g.rows[ri].row = Arc::new(row);
-        } else {
+    let last = galley.rows.len().saturating_sub(1);
+    let hi = hi.min(last);
+    let span = hi.saturating_sub(lo);
+    if span <= 2 {
+        let mut g = (*galley).clone();
+        for ri in lo..=hi {
             Arc::make_mut(&mut g.rows[ri].row);
         }
+        crate::io::log::slow(
+            &format!("hollow short sel_rows={span} galley_rows={}", g.rows.len()),
+            t0,
+            crate::io::log::SPAN_MS,
+        );
+        return Arc::new(g);
     }
+    let dummy = dummy_row(ui);
+    let mut g = (*galley).clone();
+    let mut n_hollow = 0usize;
+    let mut n_keep = 0usize;
+    for ri in lo..=hi {
+        let at_end = ri == lo || ri == hi;
+        let near = ri >= keep_lo && ri <= keep_hi;
+        if !at_end && !near {
+            if let Some(dummy) = dummy.as_ref() {
+                let src = &g.rows[ri].row;
+                let mut row = (**dummy).clone();
+                row.size = src.size;
+                row.ends_with_newline = src.ends_with_newline;
+                row.glyphs.clear();
+                row.visuals = RowVisuals::default();
+                g.rows[ri].row = Arc::new(row);
+                n_hollow += 1;
+                continue;
+            }
+        }
+        Arc::make_mut(&mut g.rows[ri].row);
+        n_keep += 1;
+    }
+    crate::io::log::slow(
+        &format!(
+            "hollow sel_rows={span} keep={n_keep} hollow={n_hollow} galley_rows={}",
+            g.rows.len()
+        ),
+        t0,
+        crate::io::log::SPAN_MS,
+    );
     Arc::new(g)
 }
 

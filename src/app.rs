@@ -1827,7 +1827,9 @@ impl App {
                     ui.set_clip_rect(side);
                     ui.set_min_size(side.size());
                     ui.set_max_size(side.size());
+                    let t_side = std::time::Instant::now();
                     self.show_sidebar(ui);
+                    crate::io::log::slow("sidebar", t_side, crate::io::log::SPAN_MS);
                 },
             );
 
@@ -1860,7 +1862,9 @@ impl App {
                 ui.set_clip_rect(content);
                 ui.set_min_size(content.size());
                 ui.set_max_size(content.size());
+                let t_doc = std::time::Instant::now();
                 self.show_doc_pane(ui);
+                crate::io::log::slow("doc_pane", t_doc, crate::io::log::SPAN_MS);
             },
         );
     }
@@ -3307,7 +3311,17 @@ impl eframe::App for App {
                 .active_tab()
                 .map(|t| t.doc.text.len())
                 .unwrap_or(0);
-            crate::io::log::ui_lag(t0, &format!("chars={n}"));
+            let mode = self
+                .win()
+                .active_tab()
+                .map(|t| format!("{:?}", t.mode))
+                .unwrap_or_else(|| "-".into());
+            let side = if self.win().sidebar_open {
+                format!("{:?}", self.win().sidebar_tab)
+            } else {
+                "off".into()
+            };
+            crate::io::log::ui_lag(t0, &format!("chars={n} mode={mode} side={side}"));
         }
     }
 

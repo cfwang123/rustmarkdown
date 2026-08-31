@@ -189,9 +189,7 @@ pub fn show(
     out.offset_y = sa.state.offset.y;
     let pane = ui.max_rect();
     out.hovered = ui.rect_contains_pointer(pane);
-    if out.changed {
-        crate::io::log::slow("editor.show", t0, crate::io::log::SPAN_MS);
-    }
+    crate::io::log::slow("editor.show", t0, crate::io::log::SPAN_MS);
     out
 }
 
