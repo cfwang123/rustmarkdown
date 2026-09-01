@@ -12,3 +12,4 @@ pub mod single;
 pub mod vimcrypt;
 pub mod watch;
 pub mod word;
+pub mod xlsx;

@@ -213,7 +213,7 @@ tr_def! {
     filter_images: "图片", "Images";
     filter_shortcut: "快捷方式", "Shortcuts";
     filter_all: "所有文件", "All files";
-    welcome_hint: "拖放 Markdown / Word / PDF / 图片、文件夹或快捷方式（.lnk）到此窗口，或使用「文件」菜单 / 工具栏。", "Drop Markdown / Word / PDF / images, a folder, or a shortcut (.lnk) here, or use the File menu / toolbar.";
+    welcome_hint: "拖放 Markdown / Word / PDF / Excel / 图片、文件夹或快捷方式（.lnk）到此窗口，或使用「文件」菜单 / 工具栏。", "Drop Markdown / Word / PDF / Excel / images, a folder, or a shortcut (.lnk) here, or use the File menu / toolbar.";
     welcome_keys: "Ctrl+O 打开   Ctrl+F 查找   Ctrl+Shift+O 文件夹   Ctrl+1/2/3 模式   F4 侧栏", "Ctrl+O Open   Ctrl+F Find   Ctrl+Shift+O Folder   Ctrl+1/2/3 Mode   F4 Sidebar";
     drop_to_open: "松开以打开文件", "Drop to open";
     code_fold_collapse: "... 收起", "... collapse";
@@ -244,6 +244,7 @@ tr_def! {
     pdf_readonly_save: "PDF 为只读预览，无法保存", "PDF is read-only and cannot be saved";
     image_readonly_save: "图片为只读预览，请用「另存为」导出", "Image is read-only; use Save As to export";
     word_readonly_save: "Word 为只读预览，请用「另存为」导出 Markdown", "Word is read-only; use Save As to export Markdown";
+    xlsx_readonly_save: "表格为只读预览，无法保存", "Spreadsheet is read-only and cannot be saved";
     saved: "已保存 {0}", "Saved {0}";
     opened_n_files: "已在当前窗口打开 {0} 个文件", "Opened {0} files in this window";
     drop_no_content: "无法读取拖入的文件（没有路径也没有内容）", "Cannot read dropped file (no path or content)";
@@ -301,6 +302,12 @@ tr_def! {
     word_cache: "无法创建预览缓存：{0}", "Cannot create preview cache: {0}";
     word_read: "无法读取 Word 文档：{0} ({1})", "Cannot read Word document: {0} ({1})";
     word_read_fail: "读取 Word 文档失败：{0}", "Failed to read Word document: {0}";
+    xlsx_empty: "表格文件是空文件", "Spreadsheet is empty";
+    xlsx_no_sheets: "无可显示工作表", "No worksheets to display";
+    xlsx_open: "无法打开表格：{0}", "Cannot open spreadsheet: {0}";
+    xlsx_read: "无法读取表格：{0} ({1})", "Cannot read spreadsheet: {0} ({1})";
+    xlsx_read_fail: "读取表格失败：{0}", "Failed to read spreadsheet: {0}";
+    xlsx_status: "{0}  {1}  ·  {2} 表  ·  {3} 行 × {4} 列  ·  {5}%", "{0}  {1}  ·  {2} sheets  ·  {3}×{4}  ·  {5}%";
     pdfium_load: "无法加载 pdfium.dll（{0}）：{1}", "Cannot load pdfium.dll ({0}): {1}";
     pdfium_sym: "pdfium 缺少符号 {0}：{1}", "pdfium missing symbol {0}: {1}";
     pdfium_missing: "找不到 pdfium.dll（应与 exe 同目录，或 native/pdfium/）", "pdfium.dll not found (place it next to the exe, or in native/pdfium/)";
@@ -473,6 +480,31 @@ pub fn word_read(path: impl std::fmt::Display, e: impl std::fmt::Display) -> Str
 }
 pub fn word_read_fail(e: impl std::fmt::Display) -> String {
     r1(t().word_read_fail, e)
+}
+pub fn xlsx_open(e: impl std::fmt::Display) -> String {
+    r1(t().xlsx_open, e)
+}
+pub fn xlsx_read(path: impl std::fmt::Display, e: impl std::fmt::Display) -> String {
+    r2(t().xlsx_read, path, e)
+}
+pub fn xlsx_read_fail(e: impl std::fmt::Display) -> String {
+    r1(t().xlsx_read_fail, e)
+}
+pub fn xlsx_status(
+    fmt: &str,
+    name: &str,
+    n: usize,
+    rows: usize,
+    cols: usize,
+    pct: i32,
+) -> String {
+    t().xlsx_status
+        .replace("{0}", fmt)
+        .replace("{1}", name)
+        .replace("{2}", &n.to_string())
+        .replace("{3}", &rows.to_string())
+        .replace("{4}", &cols.to_string())
+        .replace("{5}", &pct.to_string())
 }
 pub fn pdfium_load(path: impl std::fmt::Display, e: impl std::fmt::Display) -> String {
     r2(t().pdfium_load, path, e)

@@ -61,6 +61,19 @@ pub fn collect_pages(page_count: usize) -> Vec<TocEntry> {
         .collect()
 }
 
+pub fn collect_sheets(names: &[String]) -> Vec<TocEntry> {
+    names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| TocEntry {
+            title: name.clone(),
+            level: 1,
+            line0: i,
+            parent: None,
+        })
+        .collect()
+}
+
 fn walk(blocks: &[MdBlock], out: &mut Vec<TocEntry>, num: &mut Option<HeadingNumber>) {
     for b in blocks {
         match b.kind {

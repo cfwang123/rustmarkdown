@@ -221,6 +221,7 @@ fn tab_view_line(tab: &Tab) -> usize {
     match tab.kind {
         DocKind::Pdf => tab.pdf.as_ref().map(|p| p.current_page()).unwrap_or(0),
         DocKind::Word => tab.preview.word_page,
+        DocKind::Xlsx => tab.xlsx.as_ref().map(|x| x.current_sheet()).unwrap_or(0),
         DocKind::Image => 0,
         DocKind::Markdown => match tab.mode {
             ViewMode::Preview => tab.preview.top_line,
@@ -707,6 +708,23 @@ impl App {
                     tab.apply_saved_view(mode, line);
                 }
             }
+            DocKind::Xlsx => {
+                let book = crate::io::xlsx::load(&path)?;
+                if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
+                    tab.doc = DocSession::from_file(
+                        path.clone(),
+                        book.plain.clone(),
+                        crate::doc::Newline::Lf,
+                        file::TextEnc::utf8(false),
+                    );
+                    tab.kind = DocKind::Xlsx;
+                    tab.xlsx = Some(view::xlsx::XlsxSession::new(book));
+                    tab.md = crate::parser::parse_with_tab("", tab_size);
+                    tab.reset_text_undo();
+                    tab.deferred = None;
+                    tab.apply_saved_view(mode, line);
+                }
+            }
             DocKind::Image => {
                 if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
                     tab.image = Some(view::img_view::ImageSession::open(&path));
@@ -858,6 +876,24 @@ impl App {
                 );
                 tab.kind = DocKind::Pdf;
                 tab.pdf = Some(view::pdf::PdfSession::open(&path));
+                tab
+            }
+            DocKind::Xlsx => {
+                let book = crate::io::xlsx::load(&path)?;
+                let mut tab = Tab::new(
+                    id,
+                    DocSession::from_file(
+                        path.clone(),
+                        book.plain.clone(),
+                        crate::doc::Newline::Lf,
+                        file::TextEnc::utf8(false),
+                    ),
+                    ViewMode::Preview,
+                    tab_size,
+                );
+                tab.kind = DocKind::Xlsx;
+                tab.xlsx = Some(view::xlsx::XlsxSession::new(book));
+                tab.md = crate::parser::parse_with_tab("", tab_size);
                 tab
             }
             DocKind::Image => {
@@ -1300,6 +1336,17 @@ impl App {
         } else {
             tab.find.prev();
         }
+        if tab.kind == DocKind::Xlsx {
+            if let Some(line) = tab.find.current().map(|h| h.line) {
+                if let Some(x) = tab.xlsx.as_mut() {
+                    x.jump_to_plain_line(line);
+                }
+                self.status = i18n::find_status(tab.find.cur + 1, tab.find.hits.len().max(1));
+            } else if !tab.find.query.trim().is_empty() {
+                self.status = t().no_match.to_string();
+            }
+            return;
+        }
         if let Some(line) = tab.find.current().map(|h| h.line) {
             tab.request_jump(line);
             self.status = i18n::find_status(tab.find.cur + 1, tab.find.hits.len().max(1));
@@ -1324,12 +1371,13 @@ impl App {
             .add_filter(
                 t().filter_docs,
                 &[
-                    "md", "markdown", "txt", "docx", "doc", "pdf", "lnk", "png", "jpg", "jpeg",
-                    "gif", "bmp", "ico", "tif", "tiff", "webp",
+                    "md", "markdown", "txt", "docx", "doc", "pdf", "xls", "xlsx", "xlsm", "lnk",
+                    "png", "jpg", "jpeg", "gif", "bmp", "ico", "tif", "tiff", "webp",
                 ],
             )
             .add_filter("Markdown", &["md", "markdown", "txt"])
             .add_filter("Word", &["doc", "docx"])
+            .add_filter("Excel", &["xls", "xlsx", "xlsm"])
             .add_filter("PDF", &["pdf"])
             .add_filter(
                 t().filter_images,
@@ -1362,6 +1410,10 @@ impl App {
         };
         if tab.kind == DocKind::Pdf {
             self.status = t().pdf_readonly_save.to_string();
+            return false;
+        }
+        if tab.kind == DocKind::Xlsx {
+            self.status = t().xlsx_readonly_save.to_string();
             return false;
         }
         if tab.kind == DocKind::Image {
@@ -1721,7 +1773,7 @@ impl App {
         let has_tab = !self.win().tabs.is_empty();
         let kind = self.win().active_tab().map(|t| t.kind);
         let can_save = kind == Some(DocKind::Markdown);
-        let can_save_as = has_tab && kind != Some(DocKind::Pdf);
+        let can_save_as = has_tab && !matches!(kind, Some(DocKind::Pdf | DocKind::Xlsx));
         let can_mode = kind == Some(DocKind::Markdown);
         let has_path = self
             .win()
@@ -1899,7 +1951,7 @@ impl App {
                 }
                 let kind = self.win().active_tab().map(|t| t.kind);
                 let can_save = kind == Some(DocKind::Markdown);
-                let can_save_as = kind.is_some() && kind != Some(DocKind::Pdf);
+                let can_save_as = kind.is_some() && !matches!(kind, Some(DocKind::Pdf | DocKind::Xlsx));
                 let can_mode = kind == Some(DocKind::Markdown);
                 ui.add_enabled_ui(can_save, |ui| {
                     if view::icons::button(ui, Icon::Save, false, t().tip_save).clicked() {
@@ -2512,6 +2564,13 @@ impl App {
                             .map(|w| w.doc.toc.as_slice())
                             .unwrap_or(&[]),
                     )
+                } else if tab.kind == DocKind::Xlsx {
+                    let names: Vec<String> = tab
+                        .xlsx
+                        .as_ref()
+                        .map(|x| x.book.sheets.iter().map(|s| s.name.clone()).collect())
+                        .unwrap_or_default();
+                    view::outline::collect_sheets(&names)
                 } else {
                     view::outline::collect(&tab.md, auto_num)
                 };
@@ -2519,6 +2578,8 @@ impl App {
                     tab.pdf.as_ref().map(|p| p.current_page()).unwrap_or(0)
                 } else if tab.kind == DocKind::Word {
                     tab.word.as_ref().map(|w| w.top_block).unwrap_or(0)
+                } else if tab.kind == DocKind::Xlsx {
+                    tab.xlsx.as_ref().map(|x| x.current_sheet()).unwrap_or(0)
                 } else if tab.mode == ViewMode::Code {
                     tab.editor_top_line
                 } else {
@@ -2591,6 +2652,10 @@ impl App {
             }
             if self.win().tabs[active].kind == DocKind::Word {
                 self.show_word_pane(ui, active);
+                return;
+            }
+            if self.win().tabs[active].kind == DocKind::Xlsx {
+                self.show_xlsx_pane(ui, active);
                 return;
             }
             if self.win().tabs[active].kind == DocKind::Image {
@@ -2792,6 +2857,38 @@ impl App {
             view::word::WordAction::CopyImage(r) => self.copy_image(&r),
             view::word::WordAction::CopyAsFile(r) => self.copy_image_file(&r),
             view::word::WordAction::OpenHref(h) => self.open_href(&h),
+        }
+    }
+
+    fn show_xlsx_pane(&mut self, ui: &mut egui::Ui, active: usize) {
+        let jump = self.win().tabs[active].pending_jump;
+        let find_q = {
+            let tab = &self.win().tabs[active];
+            if tab.find.open {
+                tab.find.query.clone()
+            } else {
+                String::new()
+            }
+        };
+        let action = if let Some(xlsx) = self.win_mut().tabs[active].xlsx.as_mut() {
+            view::xlsx::show(ui, xlsx, jump, &find_q)
+        } else {
+            view::xlsx::XlsxAction::None
+        };
+        if let Some(xlsx) = self.win().tabs[active].xlsx.as_ref() {
+            let sheet = xlsx.current_sheet();
+            let nsel = xlsx.sel_chars();
+            let tab = &mut self.win_mut().tabs[active];
+            tab.preview.top_line = sheet;
+            tab.sel_chars = nsel;
+        }
+        match action {
+            view::xlsx::XlsxAction::None => {}
+            view::xlsx::XlsxAction::CopyText(t) => {
+                ui.ctx().copy_text(t.clone());
+                let n = t.chars().filter(|c| !c.is_control()).count();
+                self.status = i18n::copied_n_chars(n);
+            }
         }
     }
 
@@ -3102,6 +3199,8 @@ impl App {
         let tab = self.win().active_tab()?;
         let line = if tab.kind == DocKind::Pdf {
             tab.pdf.as_ref().map(|p| p.current_page()).unwrap_or(0)
+        } else if tab.kind == DocKind::Xlsx {
+            tab.xlsx.as_ref().map(|x| x.current_sheet()).unwrap_or(0)
         } else if tab.mode == ViewMode::Code {
             tab.cursor_line
         } else {
@@ -3231,6 +3330,31 @@ impl App {
                         n,
                         (tab.preview.word_zoom * 100.0).round() as i32,
                     ));
+                } else if tab.kind == DocKind::Xlsx {
+                    ui.separator();
+                    let (fmt, name, n, rows, cols, z) = tab
+                        .xlsx
+                        .as_ref()
+                        .map(|x| {
+                            let sh = x.book.sheets.get(x.current_sheet());
+                            (
+                                if x.book.legacy { "XLS" } else { "XLSX" },
+                                sh.map(|s| s.name.clone()).unwrap_or_else(|| "-".into()),
+                                x.sheet_count(),
+                                sh.map(|s| s.rows).unwrap_or(0),
+                                sh.map(|s| s.cols).unwrap_or(0),
+                                x.zoom,
+                            )
+                        })
+                        .unwrap_or(("XLSX", "-".into(), 0, 0, 0, 1.0));
+                    ui.label(i18n::xlsx_status(
+                        fmt,
+                        &name,
+                        n,
+                        rows,
+                        cols,
+                        (z * 100.0).round() as i32,
+                    ));
                 } else if tab.kind == DocKind::Image {
                     ui.separator();
                     let s = tab
@@ -3240,7 +3364,7 @@ impl App {
                         .unwrap_or_else(|| "IMG".into());
                     ui.label(i18n::image_readonly_status(&s));
                 }
-                if tab.kind != DocKind::Image {
+                if tab.kind != DocKind::Image && tab.kind != DocKind::Xlsx {
                     ui.separator();
                     let lines = if tab.doc.text.is_empty() {
                         0
@@ -3830,6 +3954,17 @@ impl App {
                 self.wins[wi].tabs[ti].image = Some(view::img_view::ImageSession::open(&path));
                 self.status = i18n::reloaded(&file_label(&path));
             }
+            Some(DocKind::Xlsx) => match crate::io::xlsx::load(&path) {
+                Ok(book) => {
+                    let tab = &mut self.wins[wi].tabs[ti];
+                    tab.doc.text = book.plain.clone();
+                    tab.xlsx = Some(view::xlsx::XlsxSession::new(book));
+                    tab.md = crate::parser::parse_with_tab("", self.settings.md_tab_size);
+                    tab.reset_text_undo();
+                    self.status = i18n::reloaded(&file_label(&path));
+                }
+                Err(e) => self.status = e,
+            },
             Some(DocKind::Word) => match crate::io::word::load(&path) {
                 Ok(wdoc) => {
                     let tab = &mut self.wins[wi].tabs[ti];

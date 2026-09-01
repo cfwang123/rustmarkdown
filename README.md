@@ -4,7 +4,7 @@
 
 A Windows-first Markdown preview / editor, drawn natively with Rust + egui. **No browser engine.**
 Three views: source, side-by-side preview, and preview. Multi-tab; drag-and-drop files, folders, and `.lnk` shortcuts.
-Also opens **DOC / DOCX / PDF / images** read-only (aligned with docview).
+Also opens **DOC / DOCX / XLS·XLSX / PDF / images** read-only (aligned with docview).
 
 Follows the DocviewWPF native-render approach (block parse with source line numbers, three view modes).
 
@@ -53,6 +53,7 @@ Implemented:
 - Back / forward (toolbar, View menu, Alt+← / Alt+→): outline clicks, `#anchors`, and in-doc relative Markdown links (cap 50)
 - **DOC / DOCX read-only** (aligned with docview DocxViewer): parse with `office_oxide` into a formatted layout and paginate directly (not via Markdown); gray canvas, white pages, 12 px gap; keeps headings / font size / bold / color / alignment / numbering / tables / images; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; PgUp/PgDn page, arrows scroll; outline jump; original file is not edited; Save As can export `.md`
 - **PDF read-only** (aligned with docview continuous pages): pdfium raster per page, stacked vertically; layout is O(visible) via page-top binary search (1000-page scrollbar drag does not walk every page); while dragging the thumb, no prefetch/text extract, and the worker drops pages already scrolled away; keep old bitmap while zooming; drop far textures; open at 100%; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; double-click toggles 100% ⇄ fit-width (does not open the page as an image overlay); PgUp/PgDn page, arrows scroll; text select is Sumatra-style yellow highlight; Ctrl+C / right-click copy selected text; outline is a page list; right-click can copy the page image
+- **XLS / XLSX / XLSM read-only** (aligned with docview virtual grid): load with `calamine`, paint a virtualized grid; sheet tabs at the bottom; frozen row/column headers; only visible cells are drawn; drag-select cells, Ctrl+C / right-click copy as TSV; Ctrl+wheel zoom; PgUp/PgDn switches sheets, arrows move the selection; outline is sheet names; no editing, original file is not overwritten
 - **Image file read-only** (aligned with docview ImageViewer): png / jpg / jpeg / gif / bmp / ico / tif / tiff / webp; open contain-fit to the window; wheel zoom (cursor-centered), pan; double-click toggles fit ⇄ 100%; `[` / `]` rotate 90°; Ctrl+C / right-click copy image or as file; Save As png/jpg/bmp; does not overwrite the original
 - Vim-encrypted Markdown: zip (`VimCrypt~01!`), blowfish (`02!`) and blowfish2 (`03!`); password prompt on open; save writes back with the original method. xchacha20 is not supported. Password stays in memory only.
 - `node pack.js` builds Release and writes `release/rustmarkdown_x.x.x.7z`
@@ -73,7 +74,7 @@ cargo run -- path\to\file.md
 node pack.js
 ```
 
-Output: `target/release/rustmarkdown.exe`.
+Output: `target/release/rustmarkdown.exe`, also copied to `rustmarkdown.exe` in the crate root.
 
 Always use `cargo build --release` (not debug). On Windows, build / `cargo run` kills a running `rustmarkdown.exe` before linking so the exe is not locked.
 
@@ -91,7 +92,7 @@ cargo run -- --selftest
 | Key | Action |
 |-----|--------|
 | Ctrl+N | New |
-| Ctrl+O | Open file (Markdown / Word / PDF / image / `.lnk`) |
+| Ctrl+O | Open file (Markdown / Word / Excel / PDF / image / `.lnk`) |
 | Ctrl+Shift+O | Open folder (sidebar workspace) |
 | Ctrl+F | Find |
 | F3 / Shift+F3 | Next / previous find hit |
@@ -103,11 +104,11 @@ cargo run -- --selftest
 | Ctrl+E | Preview ↔ last edit mode |
 | Ctrl+, | Settings |
 | Ctrl+Z / Ctrl+Y | Undo / redo |
-| Ctrl+C | Copy (selected PDF text, or the whole image on an image tab) |
-| Ctrl+wheel, Ctrl++ / Ctrl+-, Ctrl+0 | PDF / Word / image zoom / reset 100% |
+| Ctrl+C | Copy (selected PDF text, selected spreadsheet cells, or the whole image on an image tab) |
+| Ctrl+wheel, Ctrl++ / Ctrl+-, Ctrl+0 | PDF / Word / Excel / image zoom / reset 100% |
 | Wheel (image tab) | Zoom (no Ctrl; cursor-centered) |
 | [ / ] | Image rotate 90° CCW / CW |
-| PgUp / PgDn | Preview page (PDF / Word by page; Markdown by screen) |
+| PgUp / PgDn | Preview page (PDF / Word by page; Excel by sheet; Markdown by screen) |
 | ↑ ↓ ← → | Preview scroll (editor still moves the caret) |
 | F4 | Sidebar on/off |
 | Alt+← / Alt+→ | Back / forward |
@@ -122,10 +123,10 @@ src/
   nav.rs       back / forward stack
   tabs.rs      tab bar (follow-drag reorder / tear-off / merge)
   workspace.rs folder workspace tree
-  doc.rs       document session / tab / mode (Markdown / Word / PDF / image)
+  doc.rs       document session / tab / mode (Markdown / Word / Excel / PDF / image)
   parser/      Markdown parse, table widths, heading numbers
-  view/        editor, preview, Word pages, PDF pages (text select), image preview, find bar, outline, MD source highlight, fence highlight, toolbar icons, fonts
-  io/          files and encoding, file watch, Word layout IR, PDF/pdfium raster and text, image cache, Mermaid, .lnk, settings
+  view/        editor, preview, Word pages, Excel grid, PDF pages (text select), image preview, find bar, outline, MD source highlight, fence highlight, toolbar icons, fonts
+  io/          files and encoding, file watch, Word layout IR, Excel tables, PDF/pdfium raster and text, image cache, Mermaid, .lnk, settings
 assets/        app icons icon.png / icon.ico
 native/pdfium  pdfium.dll (copied next to the exe at build; not committed)
 pack.js        Release build and pack to release/rustmarkdown_x.x.x.7z

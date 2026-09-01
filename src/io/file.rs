@@ -4,6 +4,7 @@ use crate::doc::{DocKind, Newline};
 
 const TEXT_EXT: &[&str] = &["md", "markdown", "mdown", "mkd", "txt", "text"];
 const WORD_EXT: &[&str] = &["doc", "docx"];
+const XLSX_EXT: &[&str] = &["xls", "xlsx", "xlsm"];
 const PDF_EXT: &[&str] = &["pdf"];
 const IMAGE_EXT: &[&str] = &["png", "jpg", "jpeg", "gif", "bmp", "ico", "tif", "tiff", "webp"];
 
@@ -27,6 +28,13 @@ pub fn is_word_ext(path: &Path) -> bool {
     }
 }
 
+pub fn is_xlsx_ext(path: &Path) -> bool {
+    match ext_lower(path).as_deref() {
+        Some(ext) => XLSX_EXT.iter().any(|t| *t == ext),
+        None => false,
+    }
+}
+
 pub fn is_pdf_ext(path: &Path) -> bool {
     match ext_lower(path).as_deref() {
         Some(ext) => PDF_EXT.iter().any(|t| *t == ext),
@@ -46,6 +54,8 @@ pub fn kind_of(path: &Path) -> Option<DocKind> {
         Some(DocKind::Pdf)
     } else if is_word_ext(path) {
         Some(DocKind::Word)
+    } else if is_xlsx_ext(path) {
+        Some(DocKind::Xlsx)
     } else if is_image_ext(path) {
         Some(DocKind::Image)
     } else if is_text_ext(path) {
@@ -279,7 +289,9 @@ mod tests {
         assert_eq!(kind_of(Path::new("a.PNG")), Some(DocKind::Image));
         assert_eq!(kind_of(Path::new("a.jpeg")), Some(DocKind::Image));
         assert_eq!(kind_of(Path::new("a.webp")), Some(DocKind::Image));
-        assert_eq!(kind_of(Path::new("a.xls")), None);
+        assert_eq!(kind_of(Path::new("a.xls")), Some(DocKind::Xlsx));
+        assert_eq!(kind_of(Path::new("a.XLSX")), Some(DocKind::Xlsx));
+        assert_eq!(kind_of(Path::new("a.xlsm")), Some(DocKind::Xlsx));
     }
 
     #[test]

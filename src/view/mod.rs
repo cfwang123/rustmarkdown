@@ -10,6 +10,7 @@ pub mod outline;
 pub mod pdf;
 pub mod preview;
 pub mod word;
+pub mod xlsx;
 pub mod sync;
 pub mod text_sel;
 pub mod theme;

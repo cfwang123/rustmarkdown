@@ -2,6 +2,10 @@
 
 ## unreleased
 
+- `cargo build --release` 完成后把 `rustmarkdown.exe` 复制到项目根目录。
+
+- XLS / XLSX / XLSM 只读预览（对齐 docview 虚拟网格）：底部工作表页签、行列表头冻结、拖选单元格、Ctrl+C / 右键复制为 TSV；Ctrl+滚轮缩放；PgUp/PgDn 换表；大纲为表名；不可编辑保存。
+
 - PDF 文本页双击不再当图片弹层（对齐 docview）：100% ⇄ 适宽；拖选文字、右键复制页图不变。
 
 - DOC / DOCX 只读预览按 docview DocxViewer 重做：`office_oxide` 解析为带格式的排版模型后直接分页绘制（不再转成 Markdown 再预览）；保留标题、字号、加粗、颜色、对齐、列表编号、表格、图片；页尺寸/边距跟文档；灰底白页、页间距 12；大纲按标题跳转；另存为仍可导出 `.md`。

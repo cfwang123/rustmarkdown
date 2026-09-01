@@ -16,12 +16,13 @@ pub enum ViewMode {
     Preview,
 }
 
-/// 标签文档类型。Word / PDF / 图片只读预览。
+/// 标签文档类型。Word / PDF / 表格 / 图片只读预览。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DocKind {
     Markdown,
     Word,
     Pdf,
+    Xlsx,
     Image,
 }
 
@@ -152,6 +153,7 @@ pub struct Tab {
     pub asset_dir: Option<PathBuf>,
     pub pdf: Option<crate::view::pdf::PdfSession>,
     pub word: Option<crate::view::word::WordSession>,
+    pub xlsx: Option<crate::view::xlsx::XlsxSession>,
     pub image: Option<crate::view::img_view::ImageSession>,
     /// 大纲/锚点跳转到该源行（0-based）；跳转后保留若干帧以便布局完成。
     pub pending_jump: Option<usize>,
@@ -202,6 +204,7 @@ impl Tab {
             asset_dir: None,
             pdf: None,
             word: None,
+            xlsx: None,
             image: None,
             pending_jump: None,
             jump_frames: 0,
@@ -323,6 +326,14 @@ impl Tab {
             self.jump_frames = 3;
             return;
         }
+        if self.kind == DocKind::Xlsx {
+            if let Some(x) = self.xlsx.as_mut() {
+                x.jump_to_sheet(line0);
+            }
+            self.pending_jump = Some(line0);
+            self.jump_frames = 3;
+            return;
+        }
         self.pending_jump = Some(line0);
         self.pending_editor_line = Some(line0);
         self.pending_preview_line = Some(line0);
@@ -353,6 +364,11 @@ impl Tab {
                     } else {
                         self.preview.request_word_page(line);
                     }
+                }
+            }
+            DocKind::Xlsx => {
+                if let Some(x) = self.xlsx.as_mut() {
+                    x.jump_to_sheet(line);
                 }
             }
             DocKind::Image => {}

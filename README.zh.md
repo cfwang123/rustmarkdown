@@ -4,7 +4,7 @@
 
 Windows 优先的 Markdown 预览 / 编辑器，用 Rust + egui 原生绘制，**不依赖浏览器内核**。
 三种视图：代码、侧边预览、预览。支持多标签、拖放打开文件 / 文件夹 / `.lnk` 快捷方式。
-也可只读打开 **DOC / DOCX / PDF / 图片**（对齐 docview）。
+也可只读打开 **DOC / DOCX / XLS·XLSX / PDF / 图片**（对齐 docview）。
 
 参考 DocviewWPF 的纯 WPF 渲染路线（解析块带源行号、三模式切换）。
 
@@ -53,6 +53,7 @@ Windows 优先的 Markdown 预览 / 编辑器，用 Rust + egui 原生绘制，*
 - 后退 / 前进（工具栏、查看菜单、Alt+← / Alt+→）：大纲点击、`#锚点`、文内相对 Markdown 链接记入历史（上限 50）
 - **DOC / DOCX 只读预览**（对齐 docview DocxViewer）：`office_oxide` 解析为带格式的排版模型后直接分页绘制（不转 Markdown）；灰底白页、页间距 12；保留标题/字号/加粗/颜色/对齐/列表编号/表格/图片；Ctrl+滚轮 / Ctrl++- / Ctrl+0 缩放；PgUp/PgDn 翻页、方向键滚动；大纲按标题跳转；不可改原文件，可用「另存为」导出 `.md`
 - **PDF 只读预览**（对齐 docview 连续页）：pdfium 按页光栅化，竖向一页接一页；按页顶二分只排可见页（千页拖滚动条不再扫全部页）；拖条时不预取、不抽字，worker 丢掉已滚走的页；缩放拉伸旧图、远页丢纹理；打开默认 100%；Ctrl+滚轮 / Ctrl++- / Ctrl+0 缩放；双击 100% ⇄ 适宽（不把整页当图片弹层）；PgUp/PgDn 翻页、方向键滚动；拖选文字为 Sumatra 式黄底高亮，Ctrl+C / 右键复制所选文字；大纲为页列表；右键可复制页图
+- **XLS / XLSX / XLSM 只读预览**（对齐 docview 虚拟网格）：`calamine` 读入后自绘网格；底部工作表页签；行号/列标冻结；只画可见格；拖选单元格、Ctrl+C / 右键复制为 TSV；Ctrl+滚轮缩放；PgUp/PgDn 换表、方向键移动选区；大纲为表名；不可编辑、不可覆盖原文件
 - **图片文件只读预览**（对齐 docview ImageViewer）：打开 png / jpg / jpeg / gif / bmp / ico / tif / tiff / webp；打开时按窗口居中适应（contain）；滚轮缩放（光标为中心）、拖拽平移；双击适合窗口 ⇄ 100%；`[` / `]` 旋转 90°；Ctrl+C / 右键复制图片或复制为文件；另存为 png/jpg/bmp；不可覆盖原文件
 - Vim 加密 Markdown：zip（`VimCrypt~01!`）、blowfish（`02!`）、blowfish2（`03!`）；打开弹密码；保存按原加密方式写回。不支持 xchacha20。密码只在内存中。
 - `node pack.js` 一键编译并打包到 `release/rustmarkdown_x.x.x.7z`
@@ -73,7 +74,7 @@ cargo run -- path\to\file.md
 node pack.js
 ```
 
-输出：`target/release/rustmarkdown.exe`。
+输出：`target/release/rustmarkdown.exe`，并复制到项目根目录 `rustmarkdown.exe`。
 
 改完代码后用 `cargo build --release`（不要 debug）。Windows 下编译 / `cargo run` 会在链接前结束正在运行的 `rustmarkdown.exe`（避免 exe 被占用）。
 
@@ -91,7 +92,7 @@ cargo run -- --selftest
 | 键 | 功能 |
 |----|------|
 | Ctrl+N | 新建 |
-| Ctrl+O | 打开文件（Markdown / Word / PDF / 图片 / `.lnk`） |
+| Ctrl+O | 打开文件（Markdown / Word / Excel / PDF / 图片 / `.lnk`） |
 | Ctrl+Shift+O | 打开文件夹（侧栏目录树工作区） |
 | Ctrl+F | 查找 |
 | F3 / Shift+F3 | 下一个 / 上一个查找命中 |
@@ -103,11 +104,11 @@ cargo run -- --selftest
 | Ctrl+E | 预览 ↔ 上次编辑模式 |
 | Ctrl+, | 参数设置 |
 | Ctrl+Z / Ctrl+Y | 撤销 / 重做 |
-| Ctrl+C | 复制（PDF 有文字选区时复制所选文字；图片标签复制整图） |
-| Ctrl+滚轮、Ctrl++ / Ctrl+-、Ctrl+0 | PDF / Word / 图片缩放 / 恢复 100% |
+| Ctrl+C | 复制（PDF 有文字选区时复制所选文字；表格复制所选单元格；图片标签复制整图） |
+| Ctrl+滚轮、Ctrl++ / Ctrl+-、Ctrl+0 | PDF / Word / Excel / 图片缩放 / 恢复 100% |
 | 滚轮（图片标签） | 缩放（无需 Ctrl；光标为中心） |
 | [ / ] | 图片逆时针 / 顺时针旋转 90° |
-| PgUp / PgDn | 预览翻页（PDF / Word 按页；Markdown 按一屏） |
+| PgUp / PgDn | 预览翻页（PDF / Word 按页；Excel 换工作表；Markdown 按一屏） |
 | ↑ ↓ ← → | 预览滚动（编辑区仍移动光标） |
 | F4 | 目录侧栏开关 |
 | Alt+← / Alt+→ | 后退 / 前进 |
@@ -122,10 +123,10 @@ src/
   nav.rs      后退 / 前进栈
   tabs.rs     标签栏（跟手排序 / 离条拆窗 / 拖入合并）
   workspace.rs 文件夹工作区目录树
-  doc.rs      文档会话 / 标签 / 模式（Markdown / Word / PDF / 图片）
+  doc.rs      文档会话 / 标签 / 模式（Markdown / Word / Excel / PDF / 图片）
   parser/     Markdown 解析、表格列宽、标题编号
-  view/       编辑器、预览渲染、Word 分页、PDF 连续页（选字）、图片文件预览、查找条、大纲侧栏、MD 源码着色、围栏高亮、工具栏图标、字体
-  io/         文件读写与编码检测、文件监视、Word 排版 IR、PDF/pdfium 光栅化与抽字、图片缓存、Mermaid 渲染、.lnk 解析、参数设置
+  view/       编辑器、预览渲染、Word 分页、Excel 网格、PDF 连续页（选字）、图片文件预览、查找条、大纲侧栏、MD 源码着色、围栏高亮、工具栏图标、字体
+  io/         文件读写与编码检测、文件监视、Word 排版 IR、Excel 读表、PDF/pdfium 光栅化与抽字、图片缓存、Mermaid 渲染、.lnk 解析、参数设置
 assets/       程序图标 icon.png / icon.ico
 native/pdfium pdfium.dll（构建时复制到 exe 旁；不提交）
 pack.js       编译 Release 并打包到 release/rustmarkdown_x.x.x.7z
