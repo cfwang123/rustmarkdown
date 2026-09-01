@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use egui::epaint::text::RowVisuals;
-use egui::text::CCursorRange;
+use egui::text::{CCursor, CCursorRange};
 use egui::{pos2, Align, Color32, FontId, Rect, Shape, Stroke, TextFormat, TextStyle};
 
 use crate::view::highlight::LineHl;
@@ -435,39 +435,186 @@ pub fn note_sel_paint(need: bool) {
 /// 超过这么多字符的选区，静止时改叠画，避免 egui 对每一行 `make_mut` 卡约 2 秒。
 const LARGE_SEL_CHARS: usize = 400;
 
+static LARGE_SEL: Mutex<Option<CCursorRange>> = Mutex::new(None);
+static LAST_SEL_LOG: Mutex<String> = Mutex::new(String::new());
+
 pub(crate) fn should_collapse_sel(char_span: usize, keep_native: bool) -> bool {
     !keep_native && char_span > LARGE_SEL_CHARS
 }
 
-fn keep_native_sel(ui: &egui::Ui) -> bool {
+fn sel_span(r: &CCursorRange) -> usize {
+    let [a, b] = r.sorted_cursors();
+    b.index.saturating_sub(a.index)
+}
+
+fn set_large_sel(r: Option<CCursorRange>) {
+    *LARGE_SEL.lock().unwrap_or_else(|e| e.into_inner()) = r;
+}
+
+fn large_sel() -> Option<CCursorRange> {
+    LARGE_SEL.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
+fn remember_sel(msg: String) {
+    *LAST_SEL_LOG.lock().unwrap_or_else(|e| e.into_inner()) = msg;
+}
+
+pub(crate) fn last_sel_log() -> String {
+    LAST_SEL_LOG
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+fn native_edit(ui: &egui::Ui) -> bool {
     ui.input(|i| {
         if i.pointer.primary_down() {
             return true;
         }
-        i.events.iter().any(|e| {
-            !matches!(
-                e,
-                egui::Event::PointerMoved(_)
-                    | egui::Event::MouseMoved(_)
-                    | egui::Event::PointerGone
-            )
-        })
+        let shift = i.modifiers.shift;
+        for e in &i.events {
+            match e {
+                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut => return true,
+                egui::Event::Ime(egui::ImeEvent::Commit(s)) if !s.is_empty() => return true,
+                egui::Event::Ime(egui::ImeEvent::Preedit(s)) if !s.is_empty() => return true,
+                egui::Event::Key {
+                    pressed: true,
+                    key,
+                    ..
+                } => {
+                    if matches!(
+                        key,
+                        egui::Key::Backspace
+                            | egui::Key::Delete
+                            | egui::Key::Enter
+                            | egui::Key::Tab
+                            | egui::Key::Z
+                            | egui::Key::Y
+                    ) {
+                        return true;
+                    }
+                    if shift
+                        && matches!(
+                            key,
+                            egui::Key::ArrowLeft
+                                | egui::Key::ArrowRight
+                                | egui::Key::ArrowUp
+                                | egui::Key::ArrowDown
+                                | egui::Key::Home
+                                | egui::Key::End
+                                | egui::Key::PageUp
+                                | egui::Key::PageDown
+                        )
+                    {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
     })
 }
 
-/// 大选区且没有编辑/拖选事件时，先收成光标，让 TextEdit 别整篇画选区。返回被收起的选区。
-pub(crate) fn collapse_large_sel(ui: &egui::Ui) -> Option<CCursorRange> {
+fn char_slice(s: &str, lo: usize, hi: usize) -> &str {
+    if lo >= hi {
+        return "";
+    }
+    let mut start = s.len();
+    let mut end = s.len();
+    for (ci, (bi, _)) in s.char_indices().enumerate() {
+        if ci == lo {
+            start = bi;
+        }
+        if ci == hi {
+            end = bi;
+            break;
+        }
+    }
+    &s[start..end]
+}
+
+fn collapse_te_to_caret(ui: &egui::Ui, id: egui::Id, caret: CCursor) {
+    if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), id) {
+        st.cursor.set_char_range(Some(CCursorRange::one(caret)));
+        st.store(ui.ctx(), id);
+    }
+}
+
+/// Ctrl+A / 复制自己处理；大选区静止时收成光标并叠画。返回要叠画的选区。
+pub(crate) fn prepare_editor_sel(ui: &egui::Ui, text: &str) -> Option<CCursorRange> {
     let id = editor_widget_id(ui);
-    let mut st = egui::TextEdit::load_state(ui.ctx(), id)?;
-    let range = st.cursor.char_range().filter(|r| !r.is_empty())?;
-    let [min, max] = range.sorted_cursors();
-    let span = max.index.saturating_sub(min.index);
-    if !should_collapse_sel(span, keep_native_sel(ui)) {
+    let cmd_a = ui.input(|i| {
+        (i.modifiers.command || i.modifiers.ctrl) && i.key_pressed(egui::Key::A)
+    });
+    if cmd_a {
+        ui.ctx().input_mut(|i| {
+            i.events.retain(|e| {
+                !matches!(
+                    e,
+                    egui::Event::Key {
+                        key: egui::Key::A,
+                        pressed: true,
+                        ..
+                    }
+                )
+            });
+        });
+        let n = text.chars().count();
+        let range = CCursorRange::two(CCursor::new(0), CCursor::new(n));
+        set_large_sel(Some(range));
+        collapse_te_to_caret(ui, id, range.primary);
+        remember_sel(format!("ctrl_a overlay chars={n}"));
+        return Some(range);
+    }
+
+    let want_copy = ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy)));
+    let st = egui::TextEdit::load_state(ui.ctx(), id);
+    let from_te = st
+        .as_ref()
+        .and_then(|s| s.cursor.char_range())
+        .filter(|r| !r.is_empty());
+    let range = from_te.or_else(large_sel);
+    let Some(range) = range else {
+        set_large_sel(None);
+        remember_sel("none".into());
+        return None;
+    };
+    let span = sel_span(&range);
+
+    if want_copy && span > 0 {
+        let [a, b] = range.sorted_cursors();
+        ui.ctx()
+            .copy_text(char_slice(text, a.index, b.index).to_owned());
+        ui.ctx().input_mut(|i| {
+            i.events.retain(|e| !matches!(e, egui::Event::Copy));
+        });
+        remember_sel(format!("copy overlay chars={span}"));
+    }
+
+    if !should_collapse_sel(span, native_edit(ui)) {
+        if span > LARGE_SEL_CHARS {
+            set_large_sel(Some(range));
+            remember_sel(format!("native chars={span}"));
+        } else {
+            set_large_sel(None);
+            remember_sel(format!("small chars={span}"));
+        }
         return None;
     }
-    st.cursor.set_char_range(Some(CCursorRange::one(range.primary)));
-    st.store(ui.ctx(), id);
+
+    set_large_sel(Some(range));
+    collapse_te_to_caret(ui, id, range.primary);
+    remember_sel(format!("collapse overlay chars={span}"));
     Some(range)
+}
+
+pub(crate) fn note_native_sel(range: Option<CCursorRange>) {
+    match range {
+        Some(r) if !r.is_empty() && sel_span(&r) > LARGE_SEL_CHARS => set_large_sel(Some(r)),
+        Some(_) => set_large_sel(None),
+        None => {}
+    }
 }
 
 pub(crate) fn restore_sel(ui: &egui::Ui, id: egui::Id, range: CCursorRange) {

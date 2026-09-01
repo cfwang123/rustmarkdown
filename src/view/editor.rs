@@ -96,7 +96,7 @@ pub fn show(
                     st.store(ui.ctx(), id);
                 }
             }
-            let stashed_sel = crate::view::md_hl::collapse_large_sel(ui);
+            let stashed_sel = crate::view::md_hl::prepare_editor_sel(ui, text);
             let t_te = std::time::Instant::now();
             let mut te = egui::TextEdit::multiline(text)
                 .id_salt(crate::view::md_hl::EDITOR_ID_SALT)
@@ -122,8 +122,9 @@ pub fn show(
                         .map(|r| r.row.visuals.mesh.vertices.len())
                         .sum();
                     crate::io::log::write(&format!(
-                        "editor.text_edit {ms:.0}ms rows={n_rows} mesh={n_mesh} vert={n_vert} {}",
-                        crate::view::md_hl::last_hollow_log()
+                        "editor.text_edit {ms:.0}ms rows={n_rows} mesh={n_mesh} vert={n_vert} {} {}",
+                        crate::view::md_hl::last_hollow_log(),
+                        crate::view::md_hl::last_sel_log()
                     ));
                 }
             }
@@ -140,9 +141,11 @@ pub fn show(
                         range,
                     )
                 } else {
+                    crate::view::md_hl::note_native_sel(te.cursor_range);
                     Shape::Noop
                 }
             } else {
+                crate::view::md_hl::note_native_sel(te.cursor_range);
                 Shape::Noop
             };
             ui.painter().set(
