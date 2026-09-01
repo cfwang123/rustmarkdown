@@ -430,6 +430,18 @@ pub struct App {
     vim_pw: String,
 }
 
+fn recompute_find_tab(tab: &mut Tab) {
+    if tab.kind == DocKind::Xlsx {
+        if let Some(x) = tab.xlsx.as_mut() {
+            tab.find.hits = x.search(&tab.find.query);
+            tab.find.cur = 0;
+            return;
+        }
+    }
+    let text = tab.doc.text.clone();
+    tab.find.recompute(&text);
+}
+
 impl App {
     pub fn new(
         cc: &eframe::CreationContext<'_>,
@@ -1299,59 +1311,70 @@ impl App {
     }
 
     fn open_find(&mut self) {
-        let Some(tab) = self.win_mut().active_tab_mut() else {
-            return;
-        };
-        if !tab.find.open {
-            tab.find.open = true;
-            tab.find.focus = true;
-        } else {
-            tab.find.focus = true;
-        }
-        if tab.find.query.is_empty() && tab.sel_chars > 0 {
-            let a = tab.sel_start.min(tab.sel_end);
-            let b = tab.sel_start.max(tab.sel_end);
-            let t = &tab.doc.text;
-            let b0 = t.char_indices().nth(a).map(|(i, _)| i).unwrap_or(0);
-            let b1 = t.char_indices().nth(b).map(|(i, _)| i).unwrap_or(t.len());
-            if b0 < b1 {
-                tab.find.query = t[b0..b1].to_string();
+        {
+            let Some(tab) = self.win_mut().active_tab_mut() else {
+                return;
+            };
+            if !tab.find.open {
+                tab.find.open = true;
+                tab.find.focus = true;
+            } else {
+                tab.find.focus = true;
             }
+            if tab.find.query.is_empty() && tab.sel_chars > 0 && tab.kind != DocKind::Xlsx {
+                let a = tab.sel_start.min(tab.sel_end);
+                let b = tab.sel_start.max(tab.sel_end);
+                let t = &tab.doc.text;
+                let b0 = t.char_indices().nth(a).map(|(i, _)| i).unwrap_or(0);
+                let b1 = t.char_indices().nth(b).map(|(i, _)| i).unwrap_or(t.len());
+                if b0 < b1 {
+                    tab.find.query = t[b0..b1].to_string();
+                }
+            }
+            recompute_find_tab(tab);
         }
-        let text = tab.doc.text.clone();
-        tab.find.recompute(&text);
+        self.find_goto_current();
     }
 
     fn find_step(&mut self, next: bool) {
+        {
+            let Some(tab) = self.win_mut().active_tab_mut() else {
+                return;
+            };
+            tab.find.open = true;
+            if tab.find.hits.is_empty() {
+                recompute_find_tab(tab);
+            } else if next {
+                tab.find.next();
+            } else {
+                tab.find.prev();
+            }
+        }
+        self.find_goto_current();
+    }
+
+    fn find_goto_current(&mut self) {
         let Some(tab) = self.win_mut().active_tab_mut() else {
             return;
         };
-        tab.find.open = true;
         if tab.find.hits.is_empty() {
-            let text = tab.doc.text.clone();
-            tab.find.recompute(&text);
-        }
-        if next {
-            tab.find.next();
-        } else {
-            tab.find.prev();
-        }
-        if tab.kind == DocKind::Xlsx {
-            if let Some(line) = tab.find.current().map(|h| h.line) {
-                if let Some(x) = tab.xlsx.as_mut() {
-                    x.jump_to_plain_line(line);
-                }
-                self.status = i18n::find_status(tab.find.cur + 1, tab.find.hits.len().max(1));
-            } else if !tab.find.query.trim().is_empty() {
+            if !tab.find.query.trim().is_empty() {
                 self.status = t().no_match.to_string();
             }
             return;
         }
+        let cur = tab.find.cur;
+        let n = tab.find.hits.len();
+        if tab.kind == DocKind::Xlsx {
+            if let Some(x) = tab.xlsx.as_mut() {
+                x.jump_to_find(cur);
+            }
+            self.status = i18n::find_status(cur + 1, n);
+            return;
+        }
         if let Some(line) = tab.find.current().map(|h| h.line) {
             tab.request_jump(line);
-            self.status = i18n::find_status(tab.find.cur + 1, tab.find.hits.len().max(1));
-        } else if !tab.find.query.trim().is_empty() {
-            self.status = t().no_match.to_string();
+            self.status = i18n::find_status(cur + 1, n);
         }
     }
 
@@ -1586,12 +1609,14 @@ impl App {
                 toggle_sidebar = true;
             }
             if i.key_pressed(Key::F3) && !i.modifiers.ctrl && !i.modifiers.alt {
-                if i.modifiers.shift {
-                    i.consume_key(Modifiers::SHIFT, Key::F3);
-                    find_prev = true;
-                } else {
-                    i.consume_key(Modifiers::NONE, Key::F3);
-                    find_next = true;
+                if !find_bar_on {
+                    if i.modifiers.shift {
+                        i.consume_key(Modifiers::SHIFT, Key::F3);
+                        find_prev = true;
+                    } else {
+                        i.consume_key(Modifiers::NONE, Key::F3);
+                        find_next = true;
+                    }
                 }
             }
             if find_bar_on && i.key_pressed(Key::Escape) {
@@ -3888,9 +3913,9 @@ impl App {
             }
             Some(FindBarEvent::Changed) => {
                 if let Some(tab) = self.win_mut().active_tab_mut() {
-                    let text = tab.doc.text.clone();
-                    tab.find.recompute(&text);
+                    recompute_find_tab(tab);
                 }
+                self.find_goto_current();
             }
             Some(FindBarEvent::Next) => self.find_step(true),
             Some(FindBarEvent::Prev) => self.find_step(false),

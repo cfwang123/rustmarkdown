@@ -53,6 +53,18 @@ impl Sheet {
             .unwrap_or("")
     }
 
+    /// 格内换行当成空格，避免查找按全文行号对不上单元格。
+    fn cell_find_hay(&self, r: usize, c: usize) -> String {
+        self.cell(r, c)
+            .chars()
+            .map(|ch| if ch == '\n' || ch == '\r' { ' ' } else { ch })
+            .collect()
+    }
+
+    pub fn matches_find(&self, r: usize, c: usize, q_lower: &str) -> bool {
+        !q_lower.is_empty() && self.cell_find_hay(r, c).to_lowercase().contains(q_lower)
+    }
+
     pub fn merge_at(&self, r: usize, c: usize) -> Option<SheetMerge> {
         self.merges.iter().copied().find(|m| m.contains(r, c))
     }
@@ -76,9 +88,38 @@ pub struct CellAddr {
 pub struct Workbook {
     pub sheets: Vec<Sheet>,
     pub legacy: bool,
-    /// 每非空格一行，供 Ctrl+F。
+    /// 每非空格一行（格内换行已换成空格），供兼容。
     pub plain: String,
-    pub hits: Vec<CellAddr>,
+}
+
+const FIND_HIT_CAP: usize = 10_000;
+
+impl Workbook {
+    /// 按单元格搜索（不拼整表），命中顺序为表序 × 行列。
+    pub fn search_cells(&self, query: &str) -> Vec<CellAddr> {
+        let q = query.trim().to_lowercase();
+        if q.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for (si, sh) in self.sheets.iter().enumerate() {
+            let mut keys: Vec<(u32, u32)> = sh.cells.keys().copied().collect();
+            keys.sort_unstable();
+            for (r, c) in keys {
+                if sh.cell_find_hay(r as usize, c as usize).to_lowercase().contains(&q) {
+                    out.push(CellAddr {
+                        sheet: si,
+                        row: r as usize,
+                        col: c as usize,
+                    });
+                    if out.len() >= FIND_HIT_CAP {
+                        return out;
+                    }
+                }
+            }
+        }
+        out
+    }
 }
 
 pub fn load(path: &Path) -> Result<Workbook, String> {
@@ -120,12 +161,11 @@ pub fn load(path: &Path) -> Result<Workbook, String> {
         let range = wb.worksheet_range(&name).map_err(|e| crate::i18n::xlsx_open(e))?;
         sheets.push(from_range(name, &range, merges));
     }
-    let (plain, hits) = build_plain(&sheets);
+    let plain = build_plain(&sheets);
     Ok(Workbook {
         sheets,
         legacy,
         plain,
-        hits,
     })
 }
 
@@ -233,10 +273,9 @@ fn display_width(s: &str) -> f32 {
         .min(80.0)
 }
 
-fn build_plain(sheets: &[Sheet]) -> (String, Vec<CellAddr>) {
+fn build_plain(sheets: &[Sheet]) -> String {
     let mut plain = String::new();
-    let mut hits = Vec::new();
-    for (si, sh) in sheets.iter().enumerate() {
+    for sh in sheets {
         let mut keys: Vec<(u32, u32)> = sh.cells.keys().copied().collect();
         keys.sort_unstable();
         for (r, c) in keys {
@@ -247,15 +286,12 @@ fn build_plain(sheets: &[Sheet]) -> (String, Vec<CellAddr>) {
             if !plain.is_empty() {
                 plain.push('\n');
             }
-            plain.push_str(t);
-            hits.push(CellAddr {
-                sheet: si,
-                row: r as usize,
-                col: c as usize,
-            });
+            for ch in t.chars() {
+                plain.push(if ch == '\n' || ch == '\r' { ' ' } else { ch });
+            }
         }
     }
-    (plain, hits)
+    plain
 }
 
 /// Excel 列标：0 → A，25 → Z，26 → AA。
@@ -313,5 +349,56 @@ mod tests {
         assert!(m.contains(2, 2));
         assert!(m.is_origin(1, 1));
         assert!(!m.is_origin(1, 2));
+    }
+
+    fn test_sheet(cells: &[((u32, u32), &str)]) -> Sheet {
+        let mut map = HashMap::new();
+        let mut max_r = 0usize;
+        let mut max_c = 0usize;
+        for ((r, c), t) in cells {
+            map.insert((*r, *c), (*t).to_string());
+            max_r = max_r.max(*r as usize);
+            max_c = max_c.max(*c as usize);
+        }
+        Sheet {
+            name: "S".into(),
+            rows: max_r + 1,
+            cols: max_c + 1,
+            col_w: vec![64.0; max_c + 1],
+            row_h: vec![20.0; max_r + 1],
+            cells: map,
+            merges: vec![],
+        }
+    }
+
+    #[test]
+    fn search_cells_ignores_inner_newlines_as_separate_hits() {
+        let book = Workbook {
+            sheets: vec![test_sheet(&[
+                ((0, 0), "hello\nworld"),
+                ((1, 0), "foo"),
+            ])],
+            legacy: false,
+            plain: String::new(),
+        };
+        let hits = book.search_cells("world");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].row, 0);
+        assert_eq!(hits[0].col, 0);
+        let hits = book.search_cells("FOO");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].row, 1);
+    }
+
+    #[test]
+    fn search_cells_chinese() {
+        let book = Workbook {
+            sheets: vec![test_sheet(&[((0, 0), "标题"), ((2, 3), "查找中文查找")])],
+            legacy: false,
+            plain: String::new(),
+        };
+        let hits = book.search_cells("查找");
+        assert_eq!(hits.len(), 1);
+        assert_eq!((hits[0].row, hits[0].col), (2, 3));
     }
 }

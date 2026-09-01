@@ -2,6 +2,9 @@
 
 ## unreleased
 
+- 查找：F3 / Shift+F3 在查找框有焦点时也能跳到下/上一个结果；改关键词后定位到第一条。
+- Excel 查找按单元格搜索并跳转（不再把整表拼成一篇再搜），避免格内换行/中文导致崩溃或跳错格。
+
 - Excel 预览拖滚动条不再误选最后一列（滚动条叠在表上，不参与拖选）。
 
 - `cargo build --release` 完成后把 `rustmarkdown.exe` 和同目录 `*.dll`（如 `pdfium.dll`）复制到 `release/`。

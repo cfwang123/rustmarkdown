@@ -75,6 +75,7 @@ pub struct XlsxSession {
     anchor: (i32, i32),
     dragging: bool,
     pending_cell: Option<(usize, usize)>,
+    find_hits: Vec<CellAddr>,
 }
 
 impl XlsxSession {
@@ -87,6 +88,7 @@ impl XlsxSession {
             anchor: (0, 0),
             dragging: false,
             pending_cell: None,
+            find_hits: Vec::new(),
         }
     }
 
@@ -102,16 +104,30 @@ impl XlsxSession {
         if self.book.sheets.is_empty() {
             return;
         }
-        self.sheet_i = i.min(self.book.sheets.len() - 1);
+        let i = i.min(self.book.sheets.len() - 1);
+        if self.sheet_i == i {
+            return;
+        }
+        self.sheet_i = i;
         self.sel = Sel::none();
         self.dragging = false;
     }
 
-    pub fn jump_to_plain_line(&mut self, line: usize) {
-        let Some(addr) = self.book.hits.get(line).copied() else {
-            return;
-        };
-        self.jump_to_addr(addr);
+    pub fn search(&mut self, query: &str) -> Vec<crate::view::find::FindHit> {
+        self.find_hits = self.book.search_cells(query);
+        (0..self.find_hits.len())
+            .map(|i| crate::view::find::FindHit {
+                start: i,
+                end: i + 1,
+                line: i,
+            })
+            .collect()
+    }
+
+    pub fn jump_to_find(&mut self, i: usize) {
+        if let Some(addr) = self.find_hits.get(i).copied() {
+            self.jump_to_addr(addr);
+        }
     }
 
     fn jump_to_addr(&mut self, addr: CellAddr) {
@@ -143,7 +159,9 @@ impl XlsxSession {
 
 pub fn show(ui: &mut Ui, st: &mut XlsxSession, jump: Option<usize>, find_q: &str) -> XlsxAction {
     if let Some(i) = jump {
-        st.jump_to_sheet(i);
+        if st.pending_cell.is_none() {
+            st.jump_to_sheet(i);
+        }
     }
     let mut ui = crate::view::pane_ui(ui);
     if st.book.sheets.is_empty() {
@@ -494,7 +512,7 @@ fn paint_cells(ui: &mut Ui, sh: &Sheet, vis: Rect, z: f32, sel: Sel, find_l: &st
                 pos2(origin.x + col_x(sh, c) * z, origin.y + row_y(sh, r) * z),
                 cell_size(sh, r, c, z),
             );
-            let bg = if !find_l.is_empty() && sh.cell(r, c).to_lowercase().contains(find_l) {
+            let bg = if sh.matches_find(r, c, find_l) {
                 FIND
             } else if sel.contains(r, c) {
                 SEL
@@ -621,8 +639,18 @@ fn row_y(sh: &Sheet, r: usize) -> f32 {
 fn cell_size(sh: &Sheet, r: usize, c: usize, z: f32) -> Vec2 {
     if let Some(m) = sh.merge_at(r, c) {
         if m.is_origin(r, c) {
-            let w: f32 = sh.col_w[m.c0..=m.c1.min(sh.cols.saturating_sub(1))].iter().sum();
-            let h: f32 = sh.row_h[m.r0..=m.r1.min(sh.rows.saturating_sub(1))].iter().sum();
+            let c1 = m.c1.min(sh.col_w.len().saturating_sub(1));
+            let r1 = m.r1.min(sh.row_h.len().saturating_sub(1));
+            let w: f32 = sh
+                .col_w
+                .get(m.c0..=c1)
+                .map(|s| s.iter().sum())
+                .unwrap_or_else(|| sh.col_w.get(c).copied().unwrap_or(64.0));
+            let h: f32 = sh
+                .row_h
+                .get(m.r0..=r1)
+                .map(|s| s.iter().sum())
+                .unwrap_or_else(|| sh.row_h.get(r).copied().unwrap_or(20.0));
             return vec2(w * z, h * z);
         }
     }

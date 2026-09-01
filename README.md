@@ -39,7 +39,7 @@ Implemented:
 - Preview drag-select: gaps between blocks and the empty tail of a short line start a selection; dragging across them selects the text in between. Inline `` `code` `` chips join the same selection (no longer skipped)
 - Preview fold by heading; fenced code over 10 lines starts folded (not Mermaid); click the gray footer to toggle (`... <CR> collapse` / `expand`, aligned with mdview); code boxes stretch to content width
 - Left sidebar (F4): Explorer folder tree (lazy load; single-click selects the row, no text drag; double-click opens a file; darker folder names; toolbar up/back/forward/refresh and an editable absolute path; double-click a folder to expand/collapse; context menu Open / Set as workspace / Show in Explorer / Copy path) + Outline; filter, scroll highlight, click to jump; width and on/off in settings.json
-- Ctrl+F find: case-insensitive; F3 / Shift+F3 next/prev; highlight in source and preview
+- Ctrl+F find: case-insensitive; F3 / Shift+F3 next/prev (works while the find box is focused); highlight in source and preview; Excel searches cell by cell and jumps to the hit
 - Encoding auto-detect (UTF-8 / GBK / UTF-16, …); save in original encoding; watch external changes and prompt reload
 - Tab drag aligned with docview: reorder in-bar; tearing off the bar immediately creates a new window that follows the cursor; drop on another window’s tab bar to merge; context menu “Open as workspace” (file’s parent folder in the left sidebar) and “Move to new window”. Cannot tear off when there is only one tab
 - File menu “Recent files”: last 20 paths (shown as `D:\...`, not `\\?\D:\...`), in `%LocalAppData%\rustmarkdown\settings.json`; after a menu is open, hovering another top-level menu switches to it

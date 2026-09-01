@@ -1,6 +1,6 @@
 //! 查找条：Ctrl+F，不区分大小写，F3 / Shift+F3 上下一个。
 
-use egui::{Color32, Key, RichText, Ui};
+use egui::{Color32, Key, Modifiers, RichText, Ui};
 
 #[derive(Clone, Debug)]
 pub struct FindHit {
@@ -28,11 +28,7 @@ pub enum FindBarEvent {
 impl FindState {
     pub fn recompute(&mut self, text: &str) {
         self.hits = search(text, &self.query);
-        if self.hits.is_empty() {
-            self.cur = 0;
-        } else if self.cur >= self.hits.len() {
-            self.cur = self.hits.len() - 1;
-        }
+        self.cur = 0;
     }
 
     pub fn current(&self) -> Option<&FindHit> {
@@ -73,11 +69,16 @@ pub fn search(text: &str, query: &str) -> Vec<FindHit> {
     if q.is_empty() {
         return Vec::new();
     }
-    let hay = text.to_lowercase();
-    let needle = q.to_lowercase();
-    if hay.len() != text.len() || needle.len() != q.len() {
-        return search_chars(text, q);
+    if text.is_ascii() && q.is_ascii() {
+        search_ascii(text, q)
+    } else {
+        search_chars(text, q)
     }
+}
+
+fn search_ascii(text: &str, query: &str) -> Vec<FindHit> {
+    let hay = text.to_ascii_lowercase();
+    let needle = query.to_ascii_lowercase();
     let mut hits = Vec::new();
     let mut from = 0usize;
     while from + needle.len() <= hay.len() {
@@ -85,10 +86,6 @@ pub fn search(text: &str, query: &str) -> Vec<FindHit> {
             Some(rel) => {
                 let start = from + rel;
                 let end = start + needle.len();
-                if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
-                    from = start + 1;
-                    continue;
-                }
                 let line = text[..start].bytes().filter(|b| *b == b'\n').count();
                 hits.push(FindHit { start, end, line });
                 from = end.max(from + 1);
@@ -173,6 +170,11 @@ pub fn show_bar(ui: &mut Ui, st: &mut FindState) -> Option<FindBarEvent> {
         if ui.button("×").clicked() {
             ev = Some(FindBarEvent::Close);
         }
+        if ui.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::F3)) {
+            ev = Some(FindBarEvent::Prev);
+        } else if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F3)) {
+            ev = Some(FindBarEvent::Next);
+        }
     });
     ev
 }
@@ -205,5 +207,19 @@ mod tests {
     #[test]
     fn empty_query() {
         assert!(search("abc", "  ").is_empty());
+    }
+
+    #[test]
+    fn german_ss_does_not_panic() {
+        let h = search("Straße STRASSE", "ss");
+        assert!(!h.is_empty());
+    }
+
+    #[test]
+    fn chinese_many_lines() {
+        let t = "单元格内容\n".repeat(200);
+        let h = search(&t, "内容");
+        assert_eq!(h.len(), 200);
+        assert_eq!(h[1].line, 1);
     }
 }
