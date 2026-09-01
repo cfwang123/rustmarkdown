@@ -8,7 +8,7 @@ Also opens **DOC / DOCX / XLS·XLSX / PDF / images** read-only (aligned with doc
 
 Follows the DocviewWPF native-render approach (block parse with source line numbers, three view modes).
 
-## Status (v1.0.1)
+## Status (v1.0.2)
 
 Implemented:
 
@@ -49,7 +49,7 @@ Implemented:
 - Cross-pane selection: selecting on the left highlights the matching preview text; dragging on the right highlights matching source
 - After Ctrl+Z / Ctrl+Y the caret stays at the change; the viewport does not jump to an older edit; only insert/delete enter the undo history (caret moves do not); moving to another line (including Enter) starts a new undo group; undoing back to the last saved/opened text marks the tab clean
 - Preview table right / center align: text is aligned, glyph order matches source (no RTL, so “斜体” does not become “体斜”)
-- Title bar shows the version (e.g. `demo.md — rustmarkdown v1.0.1`)
+- Title bar shows the version (e.g. `demo.md — rustmarkdown v1.0.2`)
 - Back / forward (toolbar, View menu, Alt+← / Alt+→): outline clicks, `#anchors`, and in-doc relative Markdown links (cap 50)
 - **DOC / DOCX read-only** (aligned with docview DocxViewer): parse with `office_oxide` into a formatted layout and paginate directly (not via Markdown); gray canvas, white pages, 12 px gap; keeps headings / font size / bold / color / alignment / numbering / tables / images; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; PgUp/PgDn page, arrows scroll; outline jump; original file is not edited; Save As can export `.md`
 - **PDF read-only** (aligned with docview continuous pages): pdfium raster per page, stacked vertically; layout is O(visible) via page-top binary search (1000-page scrollbar drag does not walk every page); while dragging the thumb, no prefetch/text extract, and the worker drops pages already scrolled away; keep old bitmap while zooming; drop far textures; open at 100%; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; double-click toggles 100% ⇄ fit-width (does not open the page as an image overlay); PgUp/PgDn page, arrows scroll; text select is Sumatra-style yellow highlight; Ctrl+C / right-click copy selected text; outline is a page list; right-click can copy the page image
