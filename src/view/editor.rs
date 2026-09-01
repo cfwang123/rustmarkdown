@@ -159,12 +159,20 @@ pub fn show(
                             te.response.rect,
                             text,
                         ),
-                        crate::view::md_hl::overlay_bgs(
-                            te.galley.as_ref(),
-                            te.galley_pos,
-                            clip,
-                            text,
-                            &overlay,
+                        merge_bg(
+                            crate::view::md_hl::overlay_bgs(
+                                te.galley.as_ref(),
+                                te.galley_pos,
+                                clip,
+                                text,
+                                &overlay,
+                            ),
+                            crate::view::md_hl::link_underlines(
+                                te.galley.as_ref(),
+                                te.galley_pos,
+                                clip,
+                                text,
+                            ),
                         ),
                     ),
                     sel_bg,

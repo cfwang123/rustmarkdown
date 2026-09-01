@@ -84,6 +84,7 @@ static CACHE: LazyLock<Mutex<Option<Cache>>> = LazyLock::new(|| Mutex::new(None)
 static GALLEY: LazyLock<Mutex<Vec<GalleyEntry>>> = LazyLock::new(|| Mutex::new(Vec::new()));
 static PARA: LazyLock<Mutex<Option<ParaMem>>> = LazyLock::new(|| Mutex::new(None));
 static FENCE_CACHE: LazyLock<Mutex<Option<FenceCache>>> = LazyLock::new(|| Mutex::new(None));
+static LINK_UL_CACHE: LazyLock<Mutex<Option<FenceCache>>> = LazyLock::new(|| Mutex::new(None));
 /// 上一帧编辑区有选区或按着鼠标：本帧 layouter 早于 TextEdit 更新光标，仍须先掏空。
 static NEED_SEL_HOLLOW: AtomicBool = AtomicBool::new(false);
 /// 本帧掏空结果，给 editor.show 慢日志对照。
@@ -941,6 +942,168 @@ pub fn overlay_bgs(
         }
     }
     paint_char_bgs(galley, galley_pos, clip, &ranges)
+}
+
+/// 源码超链接下划线：按行统一 y，避免 Consolas / 雅黑混排时字体自带下划线错位。
+pub fn link_underlines(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip: Rect,
+    text: &str,
+) -> Shape {
+    let bytes = link_ul_byte_spans(text);
+    if bytes.is_empty() {
+        return Shape::Noop;
+    }
+    let ranges = byte_ranges_to_chars(text, &bytes);
+    let mut shapes: Vec<Shape> = Vec::new();
+    let mut char_i = 0usize;
+    for row in &galley.rows {
+        let n = row.char_count_including_newline();
+        let c0 = char_i;
+        let c1 = char_i + n;
+        char_i = c1;
+        let r = row.rect().translate(galley_pos.to_vec2());
+        if r.bottom() < clip.top() - 2.0 || r.top() > clip.bottom() + 2.0 {
+            continue;
+        }
+        let n_ex = row.char_count_excluding_newline();
+        let y = (r.bottom() - 3.0).round();
+        if y < clip.top() || y > clip.bottom() {
+            continue;
+        }
+        for &(a, b) in &ranges {
+            if a >= c1 || b <= c0 {
+                continue;
+            }
+            let col0 = a.saturating_sub(c0).min(n_ex);
+            let col1 = if b >= c1 {
+                n_ex
+            } else {
+                b.saturating_sub(c0).min(n_ex)
+            };
+            let x0 = r.left() + row.x_offset(col0);
+            let x1 = if b >= c1 {
+                r.right().max(x0 + 2.0)
+            } else {
+                r.left() + row.x_offset(col1)
+            };
+            let x0 = x0.max(clip.left());
+            let x1 = x1.min(clip.right());
+            if x1 - x0 < 0.5 {
+                continue;
+            }
+            shapes.push(Shape::line_segment(
+                [pos2(x0, y), pos2(x1, y)],
+                Stroke::new(1.0_f32, LINK),
+            ));
+        }
+    }
+    match shapes.len() {
+        0 => Shape::Noop,
+        1 => shapes.remove(0),
+        _ => Shape::Vec(shapes),
+    }
+}
+
+fn link_ul_byte_spans(text: &str) -> Vec<(usize, usize)> {
+    let hash = hash_text(text);
+    {
+        let g = LINK_UL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = g.as_ref() {
+            if c.hash == hash {
+                return c.spans.clone();
+            }
+        }
+    }
+    let spans = link_ul_byte_spans_uncached(text);
+    {
+        let mut g = LINK_UL_CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        *g = Some(FenceCache {
+            hash,
+            spans: spans.clone(),
+        });
+    }
+    spans
+}
+
+fn link_ul_byte_spans_uncached(text: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let n = text.len();
+    let mut i = 0usize;
+    let mut in_fence = false;
+    let mut fence_ch = '\0';
+    while i < n {
+        let line_end = text[i..].find('\n').map(|k| i + k).unwrap_or(n);
+        let raw = &text[i..line_end];
+        let line = raw.strip_suffix('\r').unwrap_or(raw);
+        if let Some((ch, _, close_only)) = try_fence(line) {
+            if !in_fence {
+                in_fence = true;
+                fence_ch = ch;
+                i = if line_end < n { line_end + 1 } else { n };
+                continue;
+            }
+            if ch == fence_ch && close_only {
+                in_fence = false;
+                fence_ch = '\0';
+                i = if line_end < n { line_end + 1 } else { n };
+                continue;
+            }
+        }
+        if in_fence {
+            i = if line_end < n { line_end + 1 } else { n };
+            continue;
+        }
+        let mut p = i;
+        while p < line_end {
+            let b = text.as_bytes()[p];
+            if b == b'`' {
+                if let Some(rel) = text[p + 1..line_end].find('`') {
+                    p = p + 1 + rel + 1;
+                    continue;
+                }
+            }
+            if b == b'!' && p + 1 < line_end && text.as_bytes()[p + 1] == b'[' {
+                if let Some((end, _, _, _, _)) = link_parts(text, p + 1) {
+                    p = end.min(line_end);
+                    continue;
+                }
+            }
+            if b == b'[' {
+                if let Some((end, lab_a, lab_b, _, _)) = link_parts(text, p) {
+                    if lab_b > lab_a {
+                        out.push((lab_a, lab_b));
+                    }
+                    p = end.min(line_end);
+                    continue;
+                }
+            }
+            if let Some((j, _)) = crate::parser::try_http_url(text, p) {
+                let j = j.min(line_end);
+                if j > p {
+                    out.push((p, j));
+                    p = j;
+                    continue;
+                }
+            }
+            if let Some((j, _)) = crate::parser::try_fs_path(text, p) {
+                let j = j.min(line_end);
+                if j > p {
+                    out.push((p, j));
+                    p = j;
+                    continue;
+                }
+            }
+            let ch = text[p..].chars().next();
+            match ch {
+                Some(c) => p += c.len_utf8(),
+                None => break,
+            }
+        }
+        i = if line_end < n { line_end + 1 } else { n };
+    }
+    out
 }
 
 fn byte_ranges_to_chars(text: &str, ranges: &[(usize, usize)]) -> Vec<(usize, usize)> {
@@ -2073,8 +2236,6 @@ fn link_parts(text: &str, open_bracket: usize) -> Option<(usize, usize, usize, u
 
 fn append_link_text(job: &mut egui::text::LayoutJob, font: &FontId, s: &str) {
     append(job, font, s, LINK, Color32::TRANSPARENT, false, false);
-    // underline via last section — LayoutJob doesn't allow editing last format easily;
-    // re-append with underline by using append() then we need underline in append.
 }
 
 fn append(
@@ -2089,11 +2250,6 @@ fn append(
     if text.is_empty() {
         return;
     }
-    let underline = if color == LINK {
-        Stroke::new(1.0_f32, LINK)
-    } else {
-        Stroke::NONE
-    };
     job.append(
         text,
         0.0,
@@ -2104,7 +2260,7 @@ fn append(
             italics,
             valign: Align::BOTTOM,
             line_height: Some((font.size * 1.45).round()),
-            underline,
+            underline: Stroke::NONE,
             strikethrough: if strike {
                 Stroke::new(1.0_f32, color)
             } else {
@@ -2316,6 +2472,26 @@ mod tests {
         assert!(link_at_char(fenced, char_of(fenced, fenced.find("a.md").unwrap())).is_none());
         let code = "`D:\\docs\\a.md` 旁\n";
         assert!(link_at_char(code, char_of(code, code.find("a.md").unwrap())).is_none());
+    }
+
+    #[test]
+    fn link_underline_spans_skip_code_and_align_as_overlay() {
+        let s = "见 https://a.com 和 D:\\x\\a.md\n";
+        let job = job_of(s);
+        assert!(job
+            .sections
+            .iter()
+            .filter(|sec| sec.format.color == LINK)
+            .all(|sec| sec.format.underline == Stroke::NONE));
+        let spans = link_ul_byte_spans(s);
+        assert!(spans.iter().any(|&(a, b)| s[a..b].contains("https://a.com")));
+        assert!(spans.iter().any(|&(a, b)| s[a..b].contains("a.md")));
+        assert!(link_ul_byte_spans("```\nD:\\x\\a.md\n```\n").is_empty());
+        assert!(link_ul_byte_spans("`D:\\x\\a.md`\n").is_empty());
+        let md = "[文字](u.md)\n";
+        let sp = link_ul_byte_spans(md);
+        assert_eq!(sp.len(), 1);
+        assert_eq!(&md[sp[0].0..sp[0].1], "文字");
     }
 
     #[test]
