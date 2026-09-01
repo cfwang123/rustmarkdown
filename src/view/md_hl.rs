@@ -87,6 +87,8 @@ static FENCE_CACHE: LazyLock<Mutex<Option<FenceCache>>> = LazyLock::new(|| Mutex
 static NEED_SEL_HOLLOW: AtomicBool = AtomicBool::new(false);
 /// 本帧掏空结果，给 editor.show 慢日志对照。
 static LAST_HOLLOW: Mutex<String> = Mutex::new(String::new());
+/// 上一帧算到的视口行。打字时 TextEdit 会再排一次，此时 cursor/clip 对不上 vis=0。
+static LAST_VIS: Mutex<Option<(usize, Vec<usize>)>> = Mutex::new(None);
 
 fn heading_fg(_lv: usize) -> Color32 {
     BODY
@@ -482,6 +484,39 @@ fn vis_rows_capped(galley: &egui::Galley, origin_y: f32, clip: Rect) -> Vec<usiz
     out
 }
 
+fn vis_around_caret(caret: usize, n_rows: usize, keep: usize) -> Vec<usize> {
+    if n_rows == 0 {
+        return Vec::new();
+    }
+    let last = n_rows - 1;
+    let lo = caret.saturating_sub(keep);
+    let hi = caret.saturating_add(keep).min(last);
+    (lo..=hi).collect()
+}
+
+/// `None`：不要掏空（打字二次排版 vis=0，掏空会把视口字清掉闪白）。
+fn resolve_vis(
+    vis: Vec<usize>,
+    selecting: bool,
+    caret: usize,
+    n_rows: usize,
+    last: &mut Option<(usize, Vec<usize>)>,
+) -> Option<Vec<usize>> {
+    if !vis.is_empty() {
+        *last = Some((n_rows, vis.clone()));
+        return Some(vis);
+    }
+    if !selecting {
+        return None;
+    }
+    if let Some((n, v)) = last.as_ref() {
+        if *n == n_rows && !v.is_empty() {
+            return Some(v.clone());
+        }
+    }
+    Some(vis_around_caret(caret, n_rows, 48))
+}
+
 /// 从缓存拆出一行：保留网格和字形，但让 `paint_text_selection` 改不成字色
 ///（它按 `first_vertex` / `glyph_vertex_range` 去改顶点；置 0 后只铺选区底）。
 fn detach_row_keep_glyphs(src: &egui::epaint::text::Row) -> egui::epaint::text::Row {
@@ -611,7 +646,19 @@ fn hollow_offscreen_sel(
         }
         return galley;
     };
-    let vis = vis_rows_capped(&galley, ui.cursor().top(), ui.clip_rect());
+    let vis_raw = vis_rows_capped(&galley, ui.cursor().top(), ui.clip_rect());
+    let selecting = expanding || has_sel || prev;
+    let vis = {
+        let mut last = LAST_VIS.lock().unwrap_or_else(|e| e.into_inner());
+        resolve_vis(vis_raw, selecting, caret, galley.rows.len(), &mut last)
+    };
+    let Some(vis) = vis else {
+        remember_hollow(format!(
+            "skip vis=0 rows={} large={large} drag={dragging} sel_all={sel_all}",
+            galley.rows.len()
+        ));
+        return galley;
+    };
     let (out, n_keep, n_hollow) = apply_sel_hollow(
         galley,
         dummy.as_ref(),
@@ -619,7 +666,7 @@ fn hollow_offscreen_sel(
         sel_lo,
         sel_hi,
         &vis,
-        expanding || has_sel || prev || large,
+        selecting || large,
     );
     let n_vert: usize = out
         .rows
@@ -2108,6 +2155,29 @@ mod tests {
     }
 
     #[test]
+    fn resolve_vis_skips_empty_when_not_selecting() {
+        let mut last = None;
+        assert!(resolve_vis(Vec::new(), false, 10, 2500, &mut last).is_none());
+    }
+
+    #[test]
+    fn resolve_vis_reuses_last_when_selecting() {
+        let mut last = None;
+        let vis = resolve_vis(vec![10, 11, 12], false, 10, 2500, &mut last).unwrap();
+        assert_eq!(vis, vec![10, 11, 12]);
+        let reused = resolve_vis(Vec::new(), true, 10, 2500, &mut last).unwrap();
+        assert_eq!(reused, vec![10, 11, 12]);
+    }
+
+    #[test]
+    fn resolve_vis_selecting_without_last_uses_caret() {
+        let mut last = None;
+        let vis = resolve_vis(Vec::new(), true, 100, 2500, &mut last).unwrap();
+        assert_eq!(vis.first().copied(), Some(52));
+        assert_eq!(vis.last().copied(), Some(148));
+    }
+
+    #[test]
     fn byte_ranges_to_chars_ascii_and_cjk() {
         let s = "ab你好cd";
         // "你" starts at byte 2, "好" at 5, "c" at 8
@@ -2402,6 +2472,18 @@ mod tests {
         assert!(
             ms_hold < 200.0,
             "editor.show 选区保持太慢: {ms_hold:.0}ms sel={sel_hold}"
+        );
+        let _ = run(
+            &ctx,
+            vec![egui::Event::Text("x".into())],
+            egui::Modifiers::NONE,
+            &mut text,
+            &mut undoer,
+        );
+        let h = last_hollow_log();
+        assert!(
+            h.contains("skip vis=0") || !h.contains("vis=0"),
+            "打字 vis=0 仍掏空视口会闪白: {h}"
         );
     }
 }
