@@ -14,7 +14,7 @@ Implemented:
 
 - Multi-tab: open / close / switch / path de-dupe / drag reorder / middle-click close; long names are clipped
 - Menu bar (File / View / Tools / Help; View → Language for Chinese / English) and icon toolbar (hover shows name and shortcut)
-- Three modes (source, side-by-side, preview; resizable splitter)
+- Three modes (source, side-by-side, preview; resizable splitter); switching keeps the top-of-screen line at the top
 - Open, save, save as; prompt on unsaved close (undoing back to the last saved/opened text clears the dirty flag)
 - Drag-and-drop files / folders / `.lnk` (including CJK paths); folders load into the sidebar tree; missing paths fall back to a temp file; errors show a dialog; CLI paths. If an instance is already running, a new file opens as a tab in that window (no second process)
 - Markdown parse (GFM subset, source line numbers) and native preview (including nested inlines such as `**[link](url)**`)

@@ -308,6 +308,11 @@ impl Tab {
         if self.mode == mode {
             return;
         }
+        // 切换前记下屏幕顶部对应的源行，切过去后仍顶在视口最上。
+        let top = match self.mode {
+            ViewMode::Code | ViewMode::Side => self.editor_top_line,
+            ViewMode::Preview => self.preview.top_line,
+        };
         if self.mode != ViewMode::Preview {
             self.last_edit_mode = self.mode;
         }
@@ -315,6 +320,25 @@ impl Tab {
             self.sync_armed = false;
         }
         self.mode = mode;
+        self.pending_jump = Some(top);
+        self.jump_frames = 3;
+        match mode {
+            ViewMode::Code => {
+                self.pending_editor_line = Some(top);
+                self.pending_preview_line = None;
+                self.sync_guard = Some(Guard::after(sync::Origin::Preview));
+            }
+            ViewMode::Preview => {
+                self.pending_preview_line = Some(top);
+                self.pending_editor_line = None;
+                self.sync_guard = Some(Guard::after(sync::Origin::Editor));
+            }
+            ViewMode::Side => {
+                self.pending_editor_line = Some(top);
+                self.pending_preview_line = Some(top);
+                self.sync_guard = Some(Guard::after(sync::Origin::Editor));
+            }
+        }
     }
 
     pub fn request_jump(&mut self, line0: usize) {
@@ -456,10 +480,10 @@ impl Tab {
             return;
         }
         if self.mode == ViewMode::Preview {
-            self.mode = self.last_edit_mode;
+            let back = self.last_edit_mode;
+            self.set_mode(back);
         } else {
-            self.last_edit_mode = self.mode;
-            self.mode = ViewMode::Preview;
+            self.set_mode(ViewMode::Preview);
         }
     }
 }
@@ -496,6 +520,28 @@ fn new_text_undo(text: &str) -> egui::util::undoer::Undoer<String> {
 mod tests {
     use super::{display_path, strip_win_prefix, DocKind, DocSession, Tab, ViewMode};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn set_mode_keeps_top_line_pending() {
+        let mut t = Tab::new(1, DocSession::untitled("# a\n\n# b\n".into()), ViewMode::Code, 4);
+        t.editor_top_line = 12;
+        t.set_mode(ViewMode::Preview);
+        assert_eq!(t.mode, ViewMode::Preview);
+        assert_eq!(t.pending_preview_line, Some(12));
+        assert_eq!(t.pending_jump, Some(12));
+        assert!(t.jump_frames > 0);
+
+        t.preview.top_line = 20;
+        t.set_mode(ViewMode::Code);
+        assert_eq!(t.mode, ViewMode::Code);
+        assert_eq!(t.pending_editor_line, Some(20));
+        assert_eq!(t.pending_jump, Some(20));
+
+        t.editor_top_line = 7;
+        t.set_mode(ViewMode::Side);
+        assert_eq!(t.pending_editor_line, Some(7));
+        assert_eq!(t.pending_preview_line, Some(7));
+    }
 
     #[test]
     fn deferred_tab_keeps_path_without_reading() {
