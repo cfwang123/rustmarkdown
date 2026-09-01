@@ -215,6 +215,9 @@ fn file_label(path: &Path) -> String {
 }
 
 fn tab_view_line(tab: &Tab) -> usize {
+    if let Some(d) = &tab.deferred {
+        return d.line;
+    }
     match tab.kind {
         DocKind::Pdf => tab.pdf.as_ref().map(|p| p.current_page()).unwrap_or(0),
         DocKind::Word => tab.preview.word_page,
@@ -384,7 +387,12 @@ enum Dialog {
 
 /// 等待 Vim 密码输入的场景：打开新文件，或已打开标签重输密码。
 enum VimAsk {
-    Open { win: usize, path: PathBuf },
+    Open {
+        win: usize,
+        path: PathBuf,
+        /// 会话占位标签：解密后填进该下标，不新建。
+        into: Option<usize>,
+    },
     Retype { win: usize, tab: usize },
 }
 
@@ -527,6 +535,9 @@ impl App {
         let mut paths = Vec::new();
         for w in &self.wins {
             for t in &w.tabs {
+                if t.is_deferred() {
+                    continue;
+                }
                 if let Some(p) = &t.doc.path {
                     paths.push(p.clone());
                 }
@@ -603,26 +614,108 @@ impl App {
             if !t.path.is_file() {
                 continue;
             }
-            match self.open_path(0, &t.path) {
-                Ok(()) => {
-                    if let Some(tab) = self.win_mut().active_tab_mut() {
-                        tab.apply_saved_view(t.mode(), t.line());
-                    }
-                    n += 1;
-                }
-                Err(e) => self.status = e,
-            }
+            let kind = file::kind_of(&t.path).unwrap_or(DocKind::Markdown);
+            let tab = Tab::deferred(self.alloc_id(), t.path.clone(), kind, t.mode(), t.line());
+            self.wins[0].tabs.push(tab);
+            n += 1;
         }
         if n == 0 {
             return;
         }
+        let mut active = 0usize;
         if let Some(want) = sess.tabs.get(sess.active) {
-            if let Some((wi, ti)) = self.find_open(&want.path) {
-                self.cur = wi;
-                self.wins[wi].active = ti;
+            if let Some(ti) = self.wins[0]
+                .tabs
+                .iter()
+                .position(|tab| tab.doc.path_eq(&want.path))
+            {
+                active = ti;
             }
         }
+        self.wins[0].active = active;
+        if let Err(e) = self.ensure_tab_loaded(0, active) {
+            self.status = e;
+        }
         self.status = i18n::restored(n);
+    }
+
+    fn ensure_tab_loaded(&mut self, win_i: usize, tab_i: usize) -> Result<(), String> {
+        let Some(tab) = self.wins.get(win_i).and_then(|w| w.tabs.get(tab_i)) else {
+            return Ok(());
+        };
+        if !tab.is_deferred() {
+            return Ok(());
+        }
+        let Some(path) = tab.doc.path.clone() else {
+            if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
+                tab.deferred = None;
+            }
+            return Ok(());
+        };
+        let kind = tab.kind;
+        let mode = tab.mode;
+        let line = tab.deferred.map(|d| d.line).unwrap_or(0);
+        let tab_size = self.settings.md_tab_size;
+        match kind {
+            DocKind::Markdown => {
+                let bytes = file::read_bytes(&path)?;
+                if let Some(method) = crate::io::vimcrypt::header_method(&bytes) {
+                    if !crate::io::vimcrypt::method_supported(method) {
+                        self.dialog = Some(Dialog::Error(t().vim_unsupported_method.to_string()));
+                        return Ok(());
+                    }
+                    self.vim_ask = Some(VimAsk::Open {
+                        win: win_i,
+                        path: path.clone(),
+                        into: Some(tab_i),
+                    });
+                    self.vim_pw.clear();
+                    self.dialog = Some(Dialog::VimPassword);
+                    return Ok(());
+                }
+                let (text, newline, enc) = file::decode_bytes(&bytes);
+                if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
+                    tab.doc = DocSession::from_file(path.clone(), text, newline, enc);
+                    tab.reparse(tab_size);
+                    tab.reset_text_undo();
+                    tab.deferred = None;
+                    tab.apply_saved_view(mode, line);
+                }
+            }
+            DocKind::Word => {
+                let (text, asset) = crate::io::word::load(&path)?;
+                if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
+                    tab.doc = DocSession::from_file(
+                        path.clone(),
+                        text,
+                        crate::doc::Newline::Lf,
+                        file::TextEnc::utf8(false),
+                    );
+                    tab.kind = DocKind::Word;
+                    tab.asset_dir = Some(asset);
+                    tab.reparse(tab_size);
+                    tab.reset_text_undo();
+                    tab.deferred = None;
+                    tab.apply_saved_view(mode, line);
+                }
+            }
+            DocKind::Pdf => {
+                if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
+                    tab.pdf = Some(view::pdf::PdfSession::open(&path));
+                    tab.deferred = None;
+                    tab.apply_saved_view(mode, line);
+                }
+            }
+            DocKind::Image => {
+                if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
+                    tab.image = Some(view::img_view::ImageSession::open(&path));
+                    tab.deferred = None;
+                    tab.apply_saved_view(mode, line);
+                }
+            }
+        }
+        self.sync_watch();
+        Ok(())
     }
 
     fn persist_session(&mut self) {
@@ -698,6 +791,7 @@ impl App {
         if let Some((wi, ti)) = self.find_open(&path) {
             self.cur = wi;
             self.wins[wi].active = ti;
+            self.ensure_tab_loaded(wi, ti)?;
             self.remember_file(&path);
             self.status = i18n::switched_to(&file_label(&path));
             return Ok(());
@@ -717,6 +811,7 @@ impl App {
                     self.vim_ask = Some(VimAsk::Open {
                         win: win_i,
                         path: path.clone(),
+                        into: None,
                     });
                     self.vim_pw.clear();
                     self.dialog = Some(Dialog::VimPassword);
@@ -802,6 +897,7 @@ impl App {
         path: &Path,
         plain: &[u8],
         secret: crate::io::vimcrypt::VimSecret,
+        into: Option<usize>,
     ) {
         let id = self.alloc_id();
         let (text, newline, enc) = file::decode_bytes(plain);
@@ -814,11 +910,20 @@ impl App {
         tab.doc.vim = Some(secret);
         let remembered = find_file_view(&self.file_views, path).map(|v| (v.mode(), v.line()));
         let win = &mut self.wins[win_i];
-        win.tabs.push(tab);
-        win.active = win.tabs.len() - 1;
-        if let Some((mode, line)) = remembered {
-            if let Some(t) = win.tabs.last_mut() {
-                t.apply_saved_view(mode, line);
+        if let Some(ti) = into.filter(|i| *i < win.tabs.len()) {
+            tab.id = win.tabs[ti].id;
+            if let Some(d) = win.tabs[ti].deferred {
+                tab.apply_saved_view(win.tabs[ti].mode, d.line);
+            }
+            win.tabs[ti] = tab;
+            win.active = ti;
+        } else {
+            win.tabs.push(tab);
+            win.active = win.tabs.len() - 1;
+            if let Some((mode, line)) = remembered {
+                if let Some(t) = win.tabs.last_mut() {
+                    t.apply_saved_view(mode, line);
+                }
             }
         }
         self.sync_watch();
@@ -833,11 +938,13 @@ impl App {
         };
         let pw = std::mem::take(&mut self.vim_pw);
         match ask {
-            VimAsk::Open { win, path } => {
+            VimAsk::Open { win, path, into } => {
                 let res = file::read_bytes(&path)
                     .and_then(|b| Ok((crate::io::vimcrypt::decrypt(&b, &pw)?, b)));
                 match res {
-                    Ok(((plain, secret), _)) => self.finish_vim_open(win, &path, &plain, secret),
+                    Ok(((plain, secret), _)) => {
+                        self.finish_vim_open(win, &path, &plain, secret, into)
+                    }
                     Err(e) => self.dialog = Some(Dialog::Error(e)),
                 }
             }
@@ -1902,7 +2009,13 @@ impl App {
         self.record_tabbar_geom(ui.ctx(), geom.bar_rect, &geom.chips);
         if let Some(ev) = ev {
             match ev {
-                TabBarEvent::Select(i) => self.win_mut().active = i,
+                TabBarEvent::Select(i) => {
+                    let wi = self.cur;
+                    self.win_mut().active = i;
+                    if let Err(e) = self.ensure_tab_loaded(wi, i) {
+                        self.status = e;
+                    }
+                },
                 TabBarEvent::Close(i) => self.request_close_tab(i),
                 TabBarEvent::CloseOthers(i) => self.request_close_others(i),
                 TabBarEvent::CloseAll => self.request_close_all(),
@@ -2436,6 +2549,19 @@ impl App {
         if self.win().tabs.is_empty() {
             show_welcome(ui);
             return;
+        }
+        let wi = self.cur;
+        let active = self.win().active;
+        if self
+            .win()
+            .tabs
+            .get(active)
+            .is_some_and(|t| t.is_deferred())
+        {
+            if let Err(e) = self.ensure_tab_loaded(wi, active) {
+                ui.label(RichText::new(e).color(Color32::from_rgb(0xB9, 0x1C, 0x1C)));
+                return;
+            }
         }
         let active = self.win().active;
         let id = self.win().tabs[active].id;

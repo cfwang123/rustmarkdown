@@ -131,6 +131,12 @@ impl DocSession {
     }
 }
 
+/// 尚未读盘的会话标签：记住模式与滚动位置。
+#[derive(Clone, Copy, Debug)]
+pub struct DeferredOpen {
+    pub line: usize,
+}
+
 /// 一个标签：文档 + 该标签独立的视图状态。
 pub struct Tab {
     pub id: u64,
@@ -164,6 +170,8 @@ pub struct Tab {
     pub pending_editor_line: Option<usize>,
     pub pending_preview_line: Option<usize>,
     pub find: crate::view::find::FindState,
+    /// 会话恢复的占位标签：尚未读盘，切到该标签时再打开。
+    pub deferred: Option<DeferredOpen>,
     /// 只记录正文增删，不含光标移动。
     pub text_undo: egui::util::undoer::Undoer<String>,
     last_editor_off: f32,
@@ -209,6 +217,7 @@ impl Tab {
             pending_editor_line: None,
             pending_preview_line: None,
             find: crate::view::find::FindState::default(),
+            deferred: None,
             text_undo,
             last_editor_off: 0.0,
             last_preview_off: 0.0,
@@ -219,6 +228,35 @@ impl Tab {
 
     pub fn is_readonly(&self) -> bool {
         self.kind != DocKind::Markdown
+    }
+
+    pub fn is_deferred(&self) -> bool {
+        self.deferred.is_some()
+    }
+
+    /// 会话恢复用的占位标签：标题用路径，正文等切过来再读盘。
+    pub fn deferred(
+        id: u64,
+        path: PathBuf,
+        kind: DocKind,
+        mode: ViewMode,
+        line: usize,
+    ) -> Self {
+        let mode = if kind == DocKind::Markdown {
+            mode
+        } else {
+            ViewMode::Preview
+        };
+        let doc = DocSession::from_file(
+            path,
+            String::new(),
+            Newline::Lf,
+            crate::io::file::TextEnc::utf8(false),
+        );
+        let mut tab = Self::new(id, doc, mode, 3);
+        tab.kind = kind;
+        tab.deferred = Some(DeferredOpen { line });
+        tab
     }
 
     pub fn reset_text_undo(&mut self) {
@@ -426,8 +464,25 @@ fn new_text_undo(text: &str) -> egui::util::undoer::Undoer<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{display_path, strip_win_prefix, DocSession};
-    use std::path::Path;
+    use super::{display_path, strip_win_prefix, DocKind, DocSession, Tab, ViewMode};
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn deferred_tab_keeps_path_without_reading() {
+        let t = Tab::deferred(
+            1,
+            PathBuf::from(r"D:\notes\a.md"),
+            DocKind::Markdown,
+            ViewMode::Code,
+            12,
+        );
+        assert!(t.is_deferred());
+        assert_eq!(t.doc.display_name(), "a.md");
+        assert!(t.doc.text.is_empty());
+        assert!(!t.doc.dirty);
+        assert_eq!(t.mode, ViewMode::Code);
+        assert_eq!(t.deferred.unwrap().line, 12);
+    }
 
     #[test]
     fn undo_to_saved_clears_dirty() {
