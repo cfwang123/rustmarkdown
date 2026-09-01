@@ -23,7 +23,7 @@ Implemented:
 - ` ```mermaid ` fences: flowcharts / sequence diagrams in pure Rust (no browser; unsupported syntax falls back to source + error)
 - App icon (title bar / taskbar / exe)
 - Release / double-click exe: no console window
-- Settings (Ctrl+,): a separate Windows dialog always in front of the main window (UI language Chinese / English, Markdown tab width, heading auto-number, max image width, master log switch); stored in `%LocalAppData%\rustmarkdown\settings.json`
+- Settings (Ctrl+,): a separate Windows dialog always in front of the main window, centered on it when opened (UI language Chinese / English, Markdown tab width, heading auto-number, max image width, master log switch); stored in `%LocalAppData%\rustmarkdown\settings.json`
 - Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root; reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
 - Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file
 - Preview task lists (`- [ ]` / `- [x]`) read-only

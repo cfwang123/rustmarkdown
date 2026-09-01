@@ -23,7 +23,7 @@ Windows 优先的 Markdown 预览 / 编辑器，用 Rust + egui 原生绘制，*
 - ` ```mermaid ` 围栏：纯 Rust 渲染流程图 / 时序图等（无浏览器内核；不支持的语法回退为源码 + 错误）
 - 程序图标（窗口标题栏 / 任务栏 / exe 文件）
 - Release / 直接运行 exe 不弹出控制台窗口
-- 参数设置（Ctrl+,）：独立 Windows 窗口，始终在主窗口前面（界面语言中文 / English、Markdown Tab 宽度、标题自动编号、图片最大显示宽度、日志总开关）；保存在 `%LocalAppData%\rustmarkdown\settings.json`
+- 参数设置（Ctrl+,）：独立 Windows 窗口，始终在主窗口前面，打开时出现在父窗口正中（界面语言中文 / English、Markdown Tab 宽度、标题自动编号、图片最大显示宽度、日志总开关）；保存在 `%LocalAppData%\rustmarkdown\settings.json`
 - 无参数启动恢复上次关闭时打开的文件、视图模式与滚动位置（`session.json`），并恢复目录树工作区根目录；之后再次打开同一文件也会恢复上次的模式与位置；命令行传入路径则按参数打开（传入的是文件时仍恢复上次工作区）
 - 图片双击弹层预览（滚轮缩放、拖拽平移、Esc / 点背景关闭）；右上仅关闭按钮，无顶栏黑条；右键复制图片 / 复制为文件
 - 预览任务列表（`- [ ]` / `- [x]`）只读显示

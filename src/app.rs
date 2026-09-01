@@ -147,6 +147,17 @@ fn adopt_child_window(_root_title: &str, _child_title: &str) {}
 
 const SETTINGS_VIEWPORT: &str = "settings-window";
 
+fn center_on_parent(parent: Option<egui::Rect>, child: [f32; 2]) -> Option<egui::Pos2> {
+    let p = parent?;
+    if !p.is_finite() || p.width() < 1.0 || p.height() < 1.0 {
+        return None;
+    }
+    Some(egui::pos2(
+        p.center().x - child[0] * 0.5,
+        p.center().y - child[1] * 0.5,
+    ))
+}
+
 fn native_dialog(
     context: &egui::Context,
     id: &str,
@@ -155,6 +166,7 @@ fn native_dialog(
     size: [f32; 2],
     min_size: [f32; 2],
     resizable: bool,
+    pos: Option<egui::Pos2>,
     mut add_contents: impl FnMut(&mut egui::Ui),
 ) -> bool {
     let title_string = title.into();
@@ -167,6 +179,9 @@ fn native_dialog(
         .with_maximize_button(resizable)
         .with_minimize_button(false)
         .with_taskbar(false);
+    if let Some(p) = pos {
+        builder = builder.with_position(p);
+    }
     if let Some(icon) = app_icon() {
         builder = builder.with_icon(icon);
     }
@@ -3078,17 +3093,31 @@ impl App {
                 .as_deref(),
         );
         let need_focus = self.settings_need_focus;
+        let size = [500.0, 540.0];
+        let pos = if need_focus {
+            let parent = self
+                .wins
+                .first()
+                .and_then(|w| w.outer_rect.or(w.inner_rect));
+            center_on_parent(parent, size)
+        } else {
+            None
+        };
         let closed = native_dialog(
             ctx,
             SETTINGS_VIEWPORT,
             title,
             &root_title,
-            [500.0, 540.0],
+            size,
             [400.0, 360.0],
             true,
+            pos,
             |ui| {
                 if need_focus {
                     ui.ctx().send_viewport_cmd(ViewportCommand::Focus);
+                    if let Some(p) = pos {
+                        ui.ctx().send_viewport_cmd(ViewportCommand::OuterPosition(p));
+                    }
                 }
                 if ui.input(|i| i.key_pressed(Key::Escape)) {
                     cancel = true;
@@ -3834,6 +3863,17 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.persist_session();
         self.flush_session(None, true);
+    }
+}
+
+#[cfg(test)]
+mod center_on_parent_tests {
+    #[test]
+    fn centers_child_on_parent_rect() {
+        let parent = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(800.0, 600.0));
+        let pos = super::center_on_parent(Some(parent), [200.0, 100.0]).unwrap();
+        assert_eq!(pos, egui::pos2(400.0, 300.0));
+        assert!(super::center_on_parent(None, [200.0, 100.0]).is_none());
     }
 }
 
