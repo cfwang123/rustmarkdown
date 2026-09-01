@@ -1836,7 +1836,7 @@ fn span_group_end(ui: &Ui, text: &str) {
     if acc.dbl {
         pick = Some(PreviewLinePick {
             id: acc.id,
-            text: text.to_string(),
+            text: text.trim().to_string(),
         });
         ui.ctx()
             .plugin::<LabelSelectionState>()

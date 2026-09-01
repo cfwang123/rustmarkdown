@@ -66,6 +66,49 @@ pub fn expand_line(text: &str, char_idx: usize) -> (usize, usize) {
     (start, i)
 }
 
+/// 去掉 `[start, end)` 两端空白字符（char 下标）。全是空白则返回空区间。
+pub fn trim_ws_range(text: &str, start: usize, end: usize) -> (usize, usize) {
+    let mut a = start.min(end);
+    let b = start.max(end);
+    let mut i = 0usize;
+    for c in text.chars() {
+        if i >= b {
+            break;
+        }
+        if i >= a {
+            if c.is_whitespace() {
+                a += 1;
+            } else {
+                break;
+            }
+        }
+        i += 1;
+    }
+    if a >= b {
+        return (a, a);
+    }
+    let mut end_ex = a;
+    let mut found = false;
+    i = 0;
+    for c in text.chars() {
+        if i >= a && i < b {
+            if !c.is_whitespace() {
+                end_ex = i + 1;
+                found = true;
+            }
+        }
+        i += 1;
+        if i >= b {
+            break;
+        }
+    }
+    if found {
+        (a, end_ex)
+    } else {
+        (a, a)
+    }
+}
+
 /// 预览 galley 里光标所在的视觉行（折行后的一行）。
 #[allow(dead_code)]
 pub fn visual_row_range(galley: &Galley, char_idx: usize) -> (usize, usize) {
@@ -89,6 +132,7 @@ pub fn range_at(text: &str, char_idx: usize, triple: bool) -> CCursorRange {
     } else {
         expand_token(text, char_idx)
     };
+    let (a, b) = trim_ws_range(text, a, b);
     CCursorRange::two(CCursor::new(a), CCursor::new(b))
 }
 
@@ -323,6 +367,29 @@ mod tests {
         let r = range_at("a-b\nc", 1, true);
         let [a, b] = r.sorted_cursors();
         assert_eq!((a.index, b.index), (0, 3));
+    }
+
+    #[test]
+    fn trim_ws_range_ends() {
+        assert_eq!(trim_ws_range("  ab  ", 0, 6), (2, 4));
+        assert_eq!(trim_ws_range("\tab\t", 0, 4), (1, 3));
+        let (a, b) = trim_ws_range("   ", 0, 3);
+        assert_eq!(a, b);
+        assert_eq!(trim_ws_range("ab", 0, 2), (0, 2));
+        assert_eq!(trim_ws_range("a b", 0, 3), (0, 3));
+        let (a, b) = trim_ws_range("  ", 1, 2);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn range_at_trims_line_indent_and_space_token() {
+        let s = "  hello  \n";
+        let r = range_at(s, 4, true);
+        let [a, b] = r.sorted_cursors();
+        assert_eq!((a.index, b.index), (2, 7));
+        let r = range_at("ab cd", 2, false);
+        let [a, b] = r.sorted_cursors();
+        assert_eq!(a.index, b.index);
     }
 
     #[test]
