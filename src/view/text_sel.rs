@@ -7,18 +7,18 @@ use egui::text_selection::LabelSelectionState;
 use egui::{Color32, Event, Galley, Id, PointerButton, Pos2, Response, Stroke, Ui};
 
 /// 双击扩选停在中英文标点之前（不含）。空格、Tab 算进词里；换行仍分隔。
-/// `: / \` 与 `.` 不算分隔符，路径和 URL 会整段选中。
+/// `: ： % # / \` 与 `.` 不算分隔符，路径、URL、锚点、百分号会整段选中。
 pub fn is_sel_break(c: char) -> bool {
     if c == '\n' || c == '\r' {
         return true;
     }
     matches!(
         c,
-        // 英文标点（不含 . : / \）
+        // 英文标点（不含 . : % # / \）
         '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | '`' | ',' | ';' | '!' | '?'
-        // 中文标点
-            | '，' | '。' | '、' | '；' | '！' | '？' | '：' | '‘' | '“' | '’' | '”' | '（' | '）'
-            | '【' | '】' | '《' | '》' | '「' | '」' | '『' | '』'
+        // 中文标点（不含全角 ：）
+            | '，' | '。' | '、' | '；' | '！' | '？' | '‘' | '“' | '’' | '”' | '（' | '）' | '【'
+            | '】' | '《' | '》' | '「' | '」' | '『' | '』'
     )
 }
 
@@ -448,13 +448,17 @@ mod tests {
     }
 
     #[test]
-    fn token_colon_slash_backslash_not_break() {
+    fn token_colon_slash_backslash_pct_hash_not_break() {
         let url = "http://example.com/a";
         assert_eq!(expand_token(url, 4), (0, url.chars().count()));
         assert_eq!(expand_token("a/b/c", 2), (0, 5));
         let win = r"C:\Windows\a.md";
         assert_eq!(expand_token(win, 3), (0, win.chars().count()));
         assert_eq!(expand_token("key:value", 1), (0, 9));
+        assert_eq!(expand_token("他说：好的", 2), (0, "他说：好的".chars().count()));
+        assert_eq!(expand_token("100%", 2), (0, 4));
+        assert_eq!(expand_token("#anchor", 0), (0, 7));
+        assert_eq!(expand_token("a#b%c:d", 3), (0, 7));
     }
 
     #[test]
