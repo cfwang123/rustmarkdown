@@ -386,23 +386,42 @@ fn scroll_to_cell(ui: &mut Ui, sh: &Sheet, r: usize, c: usize, z: f32) {
     ui.scroll_to_rect(Rect::from_min_size(pos2(x, y), vec2(w.max(1.0), h.max(1.0))), None);
 }
 
+/// 浮动滚动条叠在内容右/下缘；命中要避开，否则会当成最后一列/行拖选。
+fn scroll_bar_pad(ui: &Ui) -> f32 {
+    let s = &ui.spacing().scroll;
+    s.bar_width.max(s.floating_width) + 8.0
+}
+
+fn pointer_on_scroll_bar(pos: Pos2, body: Rect, pad: f32, bar_v: bool, bar_h: bool) -> bool {
+    (bar_v && pos.x >= body.right() - pad) || (bar_h && pos.y >= body.bottom() - pad)
+}
+
 fn handle_pointer(ui: &mut Ui, st: &mut XlsxSession, vis: Rect, body: Rect, z: f32) {
+    if ui.input(|i| i.pointer.primary_released()) {
+        st.dragging = false;
+        return;
+    }
     let pointer = ui.input(|i| i.pointer.interact_pos());
     let Some(pos) = pointer else {
-        if ui.input(|i| i.pointer.primary_released()) {
-            st.dragging = false;
-        }
         return;
     };
-    if !body.contains(pos) {
-        if ui.input(|i| i.pointer.primary_released()) {
-            st.dragging = false;
-        }
+    let (tw, th) = {
+        let sh = st.sheet();
+        (
+            sh.col_w.iter().sum::<f32>() * z,
+            sh.row_h.iter().sum::<f32>() * z,
+        )
+    };
+    let bar_v = th > body.height() + 1.0;
+    let bar_h = tw > body.width() + 1.0;
+    if !body.contains(pos)
+        || pointer_on_scroll_bar(pos, body, scroll_bar_pad(ui), bar_v, bar_h)
+        || ui.ctx().dragged_id().is_some()
+    {
         return;
     }
     let pressed = ui.input(|i| i.pointer.primary_pressed());
     let down = ui.input(|i| i.pointer.primary_down());
-    let released = ui.input(|i| i.pointer.primary_released());
     let cx = (pos.x - body.left()) + vis.min.x;
     let cy = (pos.y - body.top()) + vis.min.y;
     let Some((r, c)) = ({
@@ -425,9 +444,6 @@ fn handle_pointer(ui: &mut Ui, st: &mut XlsxSession, vis: Rect, body: Rect, z: f
         st.sel.c1 = c as i32;
         st.sel.r0 = st.anchor.0;
         st.sel.c0 = st.anchor.1;
-    }
-    if released {
-        st.dragging = false;
     }
 }
 
@@ -674,5 +690,15 @@ mod tests {
     fn col_letters_match_loader() {
         assert_eq!(col_name(0), "A");
         assert_eq!(col_name(26), "AA");
+    }
+
+    #[test]
+    fn scrollbar_strip_is_not_a_cell() {
+        let body = Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0));
+        let pad = 16.0;
+        assert!(pointer_on_scroll_bar(pos2(395.0, 100.0), body, pad, true, false));
+        assert!(!pointer_on_scroll_bar(pos2(200.0, 100.0), body, pad, true, false));
+        assert!(pointer_on_scroll_bar(pos2(200.0, 295.0), body, pad, false, true));
+        assert!(!pointer_on_scroll_bar(pos2(395.0, 100.0), body, pad, false, false));
     }
 }

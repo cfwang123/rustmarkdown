@@ -2,7 +2,9 @@
 
 ## unreleased
 
-- `cargo build --release` 完成后把 `rustmarkdown.exe` 复制到项目根目录。
+- Excel 预览拖滚动条不再误选最后一列（滚动条叠在表上，不参与拖选）。
+
+- `cargo build --release` 完成后把 `rustmarkdown.exe` 和同目录 `*.dll`（如 `pdfium.dll`）复制到 `release/`。
 
 - XLS / XLSX / XLSM 只读预览（对齐 docview 虚拟网格）：底部工作表页签、行列表头冻结、拖选单元格、Ctrl+C / 右键复制为 TSV；Ctrl+滚轮缩放；PgUp/PgDn 换表；大纲为表名；不可编辑保存。
 
