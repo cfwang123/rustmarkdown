@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use egui::text::{CCursor, CCursorRange};
 use egui::text_selection::LabelSelectionState;
-use egui::{Color32, Galley, PointerButton, Pos2, Response, Stroke, Ui};
+use egui::{Color32, Event, Galley, Id, PointerButton, Pos2, Response, Stroke, Ui};
 
 /// 双击扩选停在这些字符之前（不含）：空白、引号、括号、反引号、逗号、中文标点。
 /// `: / \` 不算分隔符，路径和 URL 会整段选中。
@@ -67,6 +67,7 @@ pub fn expand_line(text: &str, char_idx: usize) -> (usize, usize) {
 }
 
 /// 预览 galley 里光标所在的视觉行（折行后的一行）。
+#[allow(dead_code)]
 pub fn visual_row_range(galley: &Galley, char_idx: usize) -> (usize, usize) {
     let mut i = 0usize;
     let mut last = (0usize, 0usize);
@@ -114,60 +115,45 @@ pub fn multi_click_over(ui: &Ui, area: egui::Rect) -> u8 {
     })
 }
 
-/// 预览 Label 选区：双击/三击时改 galley 文本，让 egui 扩到我们算出的范围（小段文本，无整篇倒序）。
+const STICKY_ID: &str = "editor_sticky_sel";
+
+pub fn sticky_range(ui: &Ui) -> Option<CCursorRange> {
+    ui.ctx().data(|d| d.get_temp(Id::new(STICKY_ID)))
+}
+
+pub fn set_sticky(ui: &Ui, range: CCursorRange) {
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(Id::new(STICKY_ID), range));
+}
+
+pub fn clear_sticky(ui: &Ui) {
+    ui.ctx()
+        .data_mut(|d| d.remove::<CCursorRange>(Id::new(STICKY_ID)));
+}
+
+/// 新的按下 / 打字 / 方向键应丢掉双击粘住的选区。
+pub fn should_clear_sticky(ui: &Ui) -> bool {
+    ui.input(|i| {
+        i.pointer.primary_pressed()
+            || i.events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::Key { pressed: true, .. } | Event::Text(_) | Event::Paste(_) | Event::Cut
+                )
+            })
+    })
+}
+
+/// 预览 Label 选区。
 pub fn paint_selectable_galley(
     ui: &Ui,
     response: &Response,
     galley_pos: Pos2,
-    mut galley: Arc<Galley>,
+    galley: Arc<Galley>,
     color: Color32,
     underline: Stroke,
 ) {
-    if let Some(masked) = mask_for_multi_click(ui, response, galley_pos, &galley) {
-        let g = Arc::make_mut(&mut galley);
-        let job = Arc::make_mut(&mut g.job);
-        job.text = masked;
-    }
     LabelSelectionState::label_text_selection(ui, response, galley_pos, galley, color, underline);
-}
-
-fn mask_for_multi_click(
-    ui: &Ui,
-    response: &Response,
-    galley_pos: Pos2,
-    galley: &Galley,
-) -> Option<String> {
-    let triple = response.triple_clicked();
-    if !triple && !response.double_clicked() {
-        return None;
-    }
-    let pointer = response
-        .interact_pointer_pos()
-        .or_else(|| ui.input(|i| i.pointer.hover_pos()))?;
-    let idx = galley.cursor_from_pos(pointer - galley_pos).index;
-    let text = galley.text();
-    let (lo, hi) = if triple {
-        visual_row_range(galley, idx)
-    } else {
-        expand_token(text, idx)
-    };
-    if lo >= hi {
-        return None;
-    }
-    Some(mask_range(text, lo, hi, triple))
-}
-
-fn mask_range(text: &str, lo: usize, hi: usize, as_line: bool) -> String {
-    let fill = if as_line { '\n' } else { ' ' };
-    let mut out = String::with_capacity(text.len());
-    for (i, _) in text.chars().enumerate() {
-        if i >= lo && i < hi {
-            out.push('x');
-        } else {
-            out.push(fill);
-        }
-    }
-    out
 }
 
 #[cfg(test)]

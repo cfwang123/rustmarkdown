@@ -101,6 +101,15 @@ pub fn show(
             let stashed_sel = if steal >= 2 {
                 None
             } else {
+                if crate::view::text_sel::should_clear_sticky(ui) {
+                    crate::view::text_sel::clear_sticky(ui);
+                } else if let Some(r) = crate::view::text_sel::sticky_range(ui) {
+                    crate::view::md_hl::restore_sel(
+                        ui,
+                        crate::view::md_hl::editor_widget_id(ui),
+                        r,
+                    );
+                }
                 crate::view::md_hl::prepare_editor_sel(ui, text)
             };
             let t_te = std::time::Instant::now();
@@ -144,6 +153,7 @@ pub fn show(
                     te.state.clone().store(ui.ctx(), te.response.id);
                     te.cursor_range = Some(range);
                     ui.memory_mut(|m| m.request_focus(te.response.id));
+                    crate::view::text_sel::set_sticky(ui, range);
                     crate::view::md_hl::note_native_sel(Some(range));
                     crate::view::md_hl::selection_bgs(
                         te.galley.as_ref(),

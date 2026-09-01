@@ -2475,6 +2475,26 @@ mod tests {
     }
 
     #[test]
+    fn table_row_drive_path_is_link() {
+        let table = "| 我的 | wode | | | | D:\\VS_Projects\\我的文件\\my账号.md |\n";
+        let job = job_of(table);
+        let links: Vec<String> = job
+            .sections
+            .iter()
+            .filter(|s| s.format.color == LINK)
+            .map(|s| job.text[s.byte_range.clone()].to_string())
+            .collect();
+        assert!(
+            links.iter().any(|t| t.contains("my账号.md")),
+            "table path should be a source link, got {links:?}"
+        );
+        assert_eq!(
+            link_at_char(table, char_of(table, table.find("my账号").unwrap())),
+            Some(SrcLink::Href("D:\\VS_Projects\\我的文件\\my账号.md".into()))
+        );
+    }
+
+    #[test]
     fn link_underline_spans_skip_code_and_align_as_overlay() {
         let s = "见 https://a.com 和 D:\\x\\a.md\n";
         let job = job_of(s);

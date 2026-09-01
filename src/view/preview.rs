@@ -241,6 +241,8 @@ pub fn show(
     if ui.input(|i| i.pointer.primary_pressed()) {
         st.pick_lines = None;
         st.pick_anchor = None;
+        ui.ctx()
+            .data_mut(|d| d.remove::<PreviewLinePick>(egui::Id::new("preview_line_pick")));
     }
     let max_h = ui.available_height();
     let nav = crate::view::consume_key_nav(&mut ui);
@@ -335,6 +337,8 @@ pub fn show_paged(
     if ui.input(|i| i.pointer.primary_pressed()) {
         st.pick_lines = None;
         st.pick_anchor = None;
+        ui.ctx()
+            .data_mut(|d| d.remove::<PreviewLinePick>(egui::Id::new("preview_line_pick")));
     }
     if crate::view::ctrl_zoom(&mut ui, &mut st.word_zoom) {
         ui.ctx().request_repaint();
@@ -512,7 +516,7 @@ fn blank_takes_space(_blocks: &[MdBlock], _i: usize) -> bool {
     true
 }
 
-/// egui 跨 Label 复制会在相邻控件之间插空格，汉字链接（`请看[文档](u)`）会变成「请看 文档」。
+/// egui 跨 Label 复制会在相邻控件之间插空格：汉字之间、中英/数字与汉字之间挤掉；英文词之间保留。
 fn squeeze_cjk_spaces(s: &str) -> String {
     let chs: Vec<char> = s.chars().filter(|&c| c != '\u{200B}').collect();
     let mut out = String::new();
@@ -523,9 +527,17 @@ fn squeeze_cjk_spaces(s: &str) -> String {
             while j < chs.len() && chs[j] == ' ' {
                 j += 1;
             }
-            let prev_cjk = out.chars().last().is_some_and(is_cjk);
-            let next_cjk = j < chs.len() && is_cjk(chs[j]);
-            if !prev_cjk || !next_cjk {
+            let prev = out.chars().last();
+            let next = chs.get(j).copied();
+            let drop = match (prev, next) {
+                (Some(a), Some(b)) => {
+                    let ac = is_cjk(a);
+                    let bc = is_cjk(b);
+                    (ac && bc) || (ac && b.is_ascii()) || (a.is_ascii() && bc)
+                }
+                _ => false,
+            };
+            if !drop {
                 for _ in i..j {
                     out.push(' ');
                 }
@@ -607,8 +619,9 @@ fn sel_gap_size(ui: &mut Ui, w: f32, h: f32) {
         Color32::TRANSPARENT,
         Stroke::NONE,
     );
+    span_group_note(ui, &response);
     // 单击空白不留选区；按住拖过才选中中间正文。
-    if response.clicked() {
+    if response.clicked() && !response.double_clicked() && !response.triple_clicked() {
         ui.ctx()
             .plugin::<LabelSelectionState>()
             .lock()
@@ -1791,7 +1804,7 @@ fn add_flow_text(
             )
             .inner
         };
-        if r.clicked() {
+        if r.clicked() && !r.double_clicked() && !r.triple_clicked() {
             clicked = true;
         }
         i += n;
@@ -1890,6 +1903,7 @@ fn add_sel_label(ui: &mut Ui, lab: Label) -> egui::Response {
             Stroke::NONE,
         );
     }
+    span_group_note(ui, &response);
     response
 }
 
@@ -1929,6 +1943,119 @@ fn paint_code_chip(
         CODE_FG,
         Stroke::NONE,
     );
+    span_group_note(ui, &response);
+}
+
+fn spans_plain_text(spans: &[MdSpan]) -> String {
+    let mut s = String::new();
+    for sp in spans {
+        match sp.kind {
+            MdSpanKind::SoftBr => s.push('\n'),
+            MdSpanKind::Image => {}
+            _ => s.push_str(&sp.text),
+        }
+    }
+    s
+}
+
+#[derive(Clone)]
+struct SpanGroupAcc {
+    id: egui::Id,
+    bg: egui::layers::ShapeIdx,
+    rects: Vec<Rect>,
+    dbl: bool,
+}
+
+#[derive(Clone)]
+struct PreviewLinePick {
+    id: egui::Id,
+    text: String,
+}
+
+fn span_group_begin(ui: &Ui, id: egui::Id) {
+    let bg = ui.painter().add(Shape::Noop);
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(
+            egui::Id::new("preview_span_acc"),
+            SpanGroupAcc {
+                id,
+                bg,
+                rects: Vec::new(),
+                dbl: false,
+            },
+        );
+    });
+}
+
+fn span_group_note(ui: &Ui, resp: &egui::Response) {
+    ui.ctx().data_mut(|d| {
+        let key = egui::Id::new("preview_span_acc");
+        if let Some(mut acc) = d.get_temp::<SpanGroupAcc>(key) {
+            acc.rects.push(resp.rect);
+            if resp.double_clicked() || resp.triple_clicked() {
+                acc.dbl = true;
+            }
+            d.insert_temp(key, acc);
+        }
+    });
+}
+
+fn span_group_end(ui: &Ui, text: &str) {
+    let acc = ui.ctx().data_mut(|d| {
+        let key = egui::Id::new("preview_span_acc");
+        let v = d.get_temp::<SpanGroupAcc>(key);
+        if v.is_some() {
+            d.remove::<SpanGroupAcc>(key);
+        }
+        v
+    });
+    let Some(acc) = acc else {
+        return;
+    };
+    let pick_key = egui::Id::new("preview_line_pick");
+    let mut pick = ui
+        .ctx()
+        .data(|d| d.get_temp::<PreviewLinePick>(pick_key));
+    if acc.dbl {
+        pick = Some(PreviewLinePick {
+            id: acc.id,
+            text: text.to_string(),
+        });
+        ui.ctx()
+            .plugin::<LabelSelectionState>()
+            .lock()
+            .clear_selection();
+    }
+    let active = pick.as_ref().is_some_and(|p| p.id == acc.id);
+    if active {
+        let mut shapes: Vec<Shape> = Vec::new();
+        let clip = ui.clip_rect();
+        for r in &acc.rects {
+            let r = r.intersect(clip);
+            if r.width() > 0.5 && r.height() > 0.5 {
+                shapes.push(Shape::rect_filled(r, 0.0, SEL_BG));
+            }
+        }
+        let shape = match shapes.len() {
+            0 => Shape::Noop,
+            1 => shapes.remove(0),
+            _ => Shape::Vec(shapes),
+        };
+        ui.painter().set(acc.bg, shape);
+        if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
+            if let Some(p) = &pick {
+                ui.ctx().copy_text(p.text.clone());
+                ui.ctx().input_mut(|i| {
+                    i.events.retain(|e| !matches!(e, egui::Event::Copy));
+                });
+            }
+        }
+    } else {
+        ui.painter().set(acc.bg, Shape::Noop);
+    }
+    if let Some(p) = pick {
+        ui.ctx().data_mut(|d| d.insert_temp(pick_key, p));
+    }
 }
 
 fn show_spans(
@@ -1943,6 +2070,9 @@ fn show_spans(
     strong: bool,
     hint: &str,
 ) {
+    let plain = spans_plain_text(spans);
+    let gid = ui.id().with("span_group").with(&plain);
+    span_group_begin(ui, gid);
     let already_wrap = ui.layout().is_horizontal() && ui.layout().main_wrap();
     let mut add = |ui: &mut Ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -1962,6 +2092,7 @@ fn show_spans(
     } else {
         text_flow(ui, add);
     }
+    span_group_end(ui, &plain);
 }
 
 fn one_span(
@@ -2220,8 +2351,10 @@ mod tests {
     fn squeeze_cjk_spaces_around_link() {
         assert_eq!(squeeze_cjk_spaces("请看 文档 了解"), "请看文档了解");
         assert_eq!(squeeze_cjk_spaces("请看  安装说明  即可"), "请看安装说明即可");
-        assert_eq!(squeeze_cjk_spaces("中文 English 汉字"), "中文 English 汉字");
-        assert_eq!(squeeze_cjk_spaces("访问 https://x.com 即可"), "访问 https://x.com 即可");
+        assert_eq!(squeeze_cjk_spaces("E2025242 扬子嘉盛： 4 台电脑"), "E2025242扬子嘉盛：4台电脑");
+        assert_eq!(squeeze_cjk_spaces("（ 90% ）"), "（90%）");
+        assert_eq!(squeeze_cjk_spaces("中文 English 汉字"), "中文English汉字");
+        assert_eq!(squeeze_cjk_spaces("访问 https://x.com 即可"), "访问https://x.com即可");
         assert_eq!(squeeze_cjk_spaces("hello world"), "hello world");
     }
 
