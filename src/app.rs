@@ -1392,6 +1392,7 @@ impl App {
         let mut find_next = false;
         let mut find_prev = false;
         let mut find_close = false;
+        let find_bar_on = self.win().active_tab().map(|t| t.find.open).unwrap_or(false);
         ctx.input_mut(|i| {
             if i.key_pressed(Key::F4) && !i.modifiers.alt && !i.modifiers.ctrl {
                 i.consume_key(Modifiers::NONE, Key::F4);
@@ -1406,7 +1407,8 @@ impl App {
                     find_next = true;
                 }
             }
-            if i.key_pressed(Key::Escape) {
+            if find_bar_on && i.key_pressed(Key::Escape) {
+                i.consume_key(Modifiers::NONE, Key::Escape);
                 find_close = true;
             }
             if i.modifiers.alt && !i.modifiers.ctrl && !i.modifiers.shift {
@@ -3213,6 +3215,8 @@ impl App {
     }
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
+        let esc = self.dialog.is_some()
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
         match &self.dialog {
             None => {}
             Some(Dialog::Reload { win, tab }) => {
@@ -3241,6 +3245,9 @@ impl App {
                             }
                         });
                     });
+                if esc && action == 0 {
+                    action = 2;
+                }
                 match action {
                     1 => {
                         self.reload_tab(wi, ti);
@@ -3268,7 +3275,7 @@ impl App {
                             self.dialog = None;
                         }
                     });
-                if !open {
+                if !open || esc {
                     self.dialog = None;
                 }
             }
@@ -3301,6 +3308,9 @@ impl App {
                             }
                         });
                     });
+                if esc && action == 0 {
+                    action = 3;
+                }
                 match action {
                     1 => {
                         self.win_mut().active = idx;
@@ -3359,7 +3369,7 @@ impl App {
                     self.dialog = None;
                     self.vim_submit();
                 }
-                if cancel {
+                if cancel || esc {
                     self.vim_ask = None;
                     self.vim_pw.clear();
                     self.dialog = None;
@@ -3387,6 +3397,9 @@ impl App {
                             }
                         });
                     });
+                if esc && action == 0 {
+                    action = 3;
+                }
                 match action {
                     1 => {
                         // 只保存待关闭的脏标签，保留的标签不动。
@@ -3438,6 +3451,9 @@ impl App {
                             }
                         });
                     });
+                if esc && action == 0 {
+                    action = 3;
+                }
                 match action {
                     1 => {
                         let n = self.win().tabs.len();
@@ -3484,7 +3500,7 @@ impl App {
                             self.dialog = None;
                         }
                     });
-                if !open {
+                if !open || esc {
                     self.dialog = None;
                 }
             }
@@ -3509,6 +3525,9 @@ impl App {
                             }
                         });
                     });
+                if esc && action == 0 {
+                    action = 3;
+                }
                 match action {
                     1 => {
                         let n = self.win().tabs.len();

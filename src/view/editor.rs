@@ -96,7 +96,12 @@ pub fn show(
                     st.store(ui.ctx(), id);
                 }
             }
-            let stashed_sel = crate::view::md_hl::prepare_editor_sel(ui, text);
+            let steal = crate::view::text_sel::multi_click_over(ui, ui.max_rect());
+            let stashed_sel = if steal >= 2 {
+                None
+            } else {
+                crate::view::md_hl::prepare_editor_sel(ui, text)
+            };
             let t_te = std::time::Instant::now();
             let mut te = egui::TextEdit::multiline(text)
                 .id_salt(crate::view::md_hl::EDITOR_ID_SALT)
@@ -104,6 +109,7 @@ pub fn show(
                 .desired_width(pane_w)
                 .desired_rows(8)
                 .frame(false)
+                .interactive(steal < 2)
                 .layouter(&mut layouter)
                 .show(ui);
             if crate::io::log::enabled() {
@@ -129,7 +135,26 @@ pub fn show(
                 }
             }
             let clip = te.text_clip_rect.intersect(ui.clip_rect());
-            let sel_bg = if let Some(range) = stashed_sel {
+            let sel_bg = if steal >= 2 {
+                if let Some(pos) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos())) {
+                    let idx = te.galley.cursor_from_pos(pos - te.galley_pos).index;
+                    let range = crate::view::text_sel::range_at(text, idx, steal >= 3);
+                    te.state.cursor.set_char_range(Some(range));
+                    te.state.clone().store(ui.ctx(), te.response.id);
+                    te.cursor_range = Some(range);
+                    ui.memory_mut(|m| m.request_focus(te.response.id));
+                    crate::view::md_hl::note_native_sel(Some(range));
+                    crate::view::md_hl::selection_bgs(
+                        te.galley.as_ref(),
+                        te.galley_pos,
+                        clip,
+                        range,
+                    )
+                } else {
+                    crate::view::md_hl::note_native_sel(te.cursor_range);
+                    Shape::Noop
+                }
+            } else if let Some(range) = stashed_sel {
                 let native = te.cursor_range.filter(|r| !r.is_empty());
                 if native.is_none() {
                     crate::view::md_hl::restore_sel(ui, te.response.id, range);

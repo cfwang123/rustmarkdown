@@ -150,6 +150,9 @@ pub fn show_bar(ui: &mut Ui, st: &mut FindState) -> Option<FindBarEvent> {
         if r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
             ev = Some(FindBarEvent::Next);
         }
+        if r.has_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
+            ev = Some(FindBarEvent::Close);
+        }
         let n = st.hits.len();
         let label = if n == 0 {
             if st.query.trim().is_empty() {

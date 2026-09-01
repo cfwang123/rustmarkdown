@@ -801,13 +801,16 @@ fn render_blocks(
                     .fill(c(0xF9, 0xFA, 0xFB))
                     .inner_margin(8.0)
                     .show(ui, |ui| {
-                        ui.label(rt_sel(
-                            RichText::new(&b.text)
-                                .monospace()
-                                .size(12.0)
-                                .color(c(0x4B, 0x55, 0x63)),
-                            piece_in_sel(&hint, &b.text),
-                        ));
+                        add_sel_label(
+                            ui,
+                            Label::new(rt_sel(
+                                RichText::new(&b.text)
+                                    .monospace()
+                                    .size(12.0)
+                                    .color(c(0x4B, 0x55, 0x63)),
+                                piece_in_sel(&hint, &b.text),
+                            )),
+                        );
                     });
                 sel_gap(ui, BASE_FS * 0.9);
             }
@@ -1171,7 +1174,7 @@ fn show_code(
             };
             let mut job = highlight::code_job(&src, &b.lang);
             job_sel(&mut job, piece_in_sel(hint, &src));
-            ui.add(egui::Label::new(job).wrap());
+            add_sel_label(ui, egui::Label::new(job).wrap());
             if foldable {
                 let more = n_lines.saturating_sub(CODE_FOLD_LINES);
                 let txt = if expanded {
@@ -1269,7 +1272,7 @@ fn show_mermaid(
                             .color(c(0xB9, 0x1C, 0x1C)),
                     );
                     let job = highlight::code_job(&b.text, "text");
-                    ui.add(egui::Label::new(job).wrap());
+                    add_sel_label(ui, egui::Label::new(job).wrap());
                 }
             }
         });
@@ -1757,13 +1760,18 @@ fn add_flow_text(
         } else {
             Label::new(rt).wrap_mode(egui::TextWrapMode::Extend)
         };
+        let lab = if let Some(s) = sense {
+            lab.sense(s)
+        } else {
+            lab
+        };
         let row_h = size * 1.45;
         let r = if wrapping {
-            if let Some(s) = sense {
-                ui.add(lab.sense(s))
-                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+            let r = add_sel_label(ui, lab);
+            if sense.is_some() {
+                r.on_hover_cursor(egui::CursorIcon::PointingHand)
             } else {
-                ui.add(lab)
+                r
             }
         } else {
             let h = row_h.max(natural.size().y);
@@ -1773,11 +1781,11 @@ fn add_flow_text(
                 |ui| {
                     ui.spacing_mut().item_spacing.y = 0.0;
                     ui.add_space((h - natural.size().y).max(0.0));
-                    if let Some(s) = sense {
-                        ui.add(lab.sense(s))
-                            .on_hover_cursor(egui::CursorIcon::PointingHand)
+                    let r = add_sel_label(ui, lab);
+                    if sense.is_some() {
+                        r.on_hover_cursor(egui::CursorIcon::PointingHand)
                     } else {
-                        ui.add(lab)
+                        r
                     }
                 },
             )
@@ -1869,6 +1877,22 @@ fn add_inline_code(ui: &mut Ui, text: &str, size: f32, hint: &str) {
     }
 }
 
+fn add_sel_label(ui: &mut Ui, lab: Label) -> egui::Response {
+    let (pos, galley, response) = lab.layout_in_ui(ui);
+    if ui.is_rect_visible(response.rect) {
+        let color = ui.style().visuals.text_color();
+        crate::view::text_sel::paint_selectable_galley(
+            ui,
+            &response,
+            pos,
+            galley,
+            color,
+            Stroke::NONE,
+        );
+    }
+    response
+}
+
 fn paint_code_chip(
     ui: &mut Ui,
     galley: std::sync::Arc<egui::Galley>,
@@ -1897,7 +1921,14 @@ fn paint_code_chip(
         );
         painter.rect_filled(chip, CODE_ROUND, bg);
     }
-    LabelSelectionState::label_text_selection(ui, &response, origin, galley, CODE_FG, Stroke::NONE);
+    crate::view::text_sel::paint_selectable_galley(
+        ui,
+        &response,
+        origin,
+        galley,
+        CODE_FG,
+        Stroke::NONE,
+    );
 }
 
 fn show_spans(

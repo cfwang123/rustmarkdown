@@ -290,8 +290,15 @@ pub fn show(
             });
             ui.add_space(4.0);
             let hint = RichText::new(crate::i18n::t().filter_chapters).size(12.0).weak();
+            let filter_id = ui.make_persistent_id("outline_filter");
+            let filter_focus = ui.memory(|m| m.has_focus(filter_id));
+            if filter_focus && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                filter.clear();
+                ui.memory_mut(|m| m.surrender_focus(filter_id));
+            }
             ui.add(
                 egui::TextEdit::singleline(filter)
+                    .id(filter_id)
                     .hint_text(hint)
                     .desired_width(ui.available_width())
                     .font(FontId::proportional(12.5)),
