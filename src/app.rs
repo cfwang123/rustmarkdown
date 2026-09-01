@@ -10,7 +10,9 @@ use crate::io::file;
 use crate::io::watch::WatchHub;
 use crate::nav::{NavHist, NavPoint};
 use crate::io::imgcache::ImgCache;
-use crate::io::session::{find_file_view, Session, SessionTab, upsert_file_view};
+use crate::io::session::{
+    find_file_view, Session, SessionTab, WindowGeom, upsert_file_view,
+};
 use crate::io::settings::Settings;
 use crate::tabs::{self, TabBarEvent};
 use crate::view;
@@ -320,6 +322,7 @@ pub struct Win {
     chip_mids: Vec<f32>,
     follow_pos: Option<egui::Pos2>,
     create_inner: Option<egui::Vec2>,
+    minimized: bool,
 }
 
 impl Win {
@@ -346,6 +349,7 @@ impl Win {
             chip_mids: Vec::new(),
             follow_pos: None,
             create_inner: None,
+            minimized: false,
         }
     }
 
@@ -429,6 +433,7 @@ impl App {
             view::highlight::warmup();
             crate::io::mermaid::warmup();
         });
+        let sess = Session::load();
         let mut app = Self {
             wins: vec![Win::new()],
             cur: 0,
@@ -444,7 +449,7 @@ impl App {
             settings: Settings::load(),
             settings_draft: None,
             settings_need_focus: false,
-            last_session: None,
+            last_session: sess.clone(),
             file_views: Vec::new(),
             session_save_at: None,
             watch: WatchHub::new(),
@@ -461,7 +466,6 @@ impl App {
         crate::io::log::set_enabled(app.settings.enable_logs);
         app.wins[0].sidebar_open = app.settings.side_panel_visible;
         app.wins[0].sidebar_width = app.settings.side_panel_width as f32;
-        let sess = Session::load();
         if let Some(s) = &sess {
             app.file_views = s.file_views.clone();
             for t in &s.tabs {
@@ -554,12 +558,26 @@ impl App {
             .wins
             .iter()
             .find_map(|w| w.workspace.as_ref().map(|ws| ws.root.clone()));
+        let window = self.live_window_geom().or_else(|| {
+            self.last_session.as_ref().and_then(|s| s.window.clone())
+        });
         Session {
             tabs,
             active,
             workspace,
             file_views,
+            window,
         }
+    }
+
+    fn live_window_geom(&self) -> Option<WindowGeom> {
+        let win = self.wins.first()?;
+        if win.minimized {
+            return None;
+        }
+        let inner = win.inner_rect?;
+        let pos = win.outer_rect.unwrap_or(inner).min;
+        WindowGeom::from_pos_size(pos.x, pos.y, inner.width(), inner.height())
     }
 
     fn restore_workspace(&mut self, dir: Option<&Path>) {
@@ -3685,8 +3703,23 @@ impl App {
         }
     }
 
+    fn note_viewport_geom(&mut self, ctx: &egui::Context) {
+        let (inner, outer, minimized) = ctx.input(|i| {
+            (
+                i.viewport().inner_rect,
+                i.viewport().outer_rect,
+                i.viewport().minimized.unwrap_or(false),
+            )
+        });
+        let w = self.win_mut();
+        w.inner_rect = inner;
+        w.outer_rect = outer;
+        w.minimized = minimized;
+    }
+
     fn ui_window(&mut self, ctx: &egui::Context, win_i: usize) {
         self.cur = win_i;
+        self.note_viewport_geom(ctx);
         self.note_pointer(ctx);
         if self.dialog.is_none() && self.img_overlay.is_none() {
             self.handle_shortcuts(ctx);

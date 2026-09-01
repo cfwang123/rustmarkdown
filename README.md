@@ -26,7 +26,7 @@ Implemented:
 - Input UIs cancel with Esc: password / unsaved / quit / reload / error / about dialogs, find bar, outline filter, explorer path, settings
 - Source and preview: double-click expands to the characters before whitespace, `' " ( )`, backtick, comma, and Chinese punctuation `，。、‘“’”（）？` (`: / \` stay in the token); triple-click selects the line. Source double-click keeps the selection (no flash). Preview double-click selects the whole paragraph / list item; copy does not insert extra spaces between CJK and Latin/digits. Source double-click no longer waits 0.5–1 s, including when scrolled down a long file
 - Settings (Ctrl+,): a separate Windows dialog always in front of the main window, centered on it when opened (UI language Chinese / English, Markdown tab width, heading auto-number, max image width, master log switch); stored in `%LocalAppData%\rustmarkdown\settings.json`
-- Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root; reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
+- Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root and the main window size/position (if that rect is off-screen, size is kept and position falls back to the OS default); reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
 - Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file
 - Preview task lists (`- [ ]` / `- [x]`) read-only
 - Preview tables as a continuous grid (header fill, shared borders), not per-cell rounded boxes
@@ -57,7 +57,7 @@ Implemented:
 - Vim-encrypted Markdown: zip (`VimCrypt~01!`), blowfish (`02!`) and blowfish2 (`03!`); password prompt on open; save writes back with the original method. xchacha20 is not supported. Password stays in memory only.
 - `node pack.js` builds Release and writes `release/rustmarkdown_x.x.x.7z`
 
-Later: light/dark theme, UI zoom, per-window session restore.
+Later: light/dark theme, UI zoom.
 
 ## Requirements
 

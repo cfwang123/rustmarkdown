@@ -35,16 +35,21 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     };
 
+    let (size, pos) = io::session::restore_startup_window();
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size(size)
+        .with_min_inner_size(io::session::MIN_SIZE)
+        .with_title(app::viewport_title(None))
+        .with_drag_and_drop(true)
+        .with_icon(
+            eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+                .expect("app icon"),
+        );
+    if let Some(p) = pos {
+        viewport = viewport.with_position(p);
+    }
     let native = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1100.0, 720.0])
-            .with_min_inner_size([640.0, 400.0])
-            .with_title(app::viewport_title(None))
-            .with_drag_and_drop(true)
-            .with_icon(
-                eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
-                    .expect("app icon"),
-            ),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(
