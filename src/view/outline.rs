@@ -354,7 +354,8 @@ pub fn show(
                         } else {
                             Color32::TRANSPARENT
                         };
-                        let row = Frame::new()
+                        let row = ui.push_id(e.line0, |ui| {
+                        Frame::new()
                             .fill(fill)
                             .corner_radius(3.0)
                             .inner_margin(Margin::symmetric(2, 1))
@@ -407,9 +408,10 @@ pub fn show(
                                         }
                                     }
                                 });
-                            });
+                            })
+                        });
                         if selected && follow_hl {
-                            let r = row.response.rect;
+                            let r = row.inner.response.rect;
                             let clip = ui.clip_rect();
                             let margin = 6.0;
                             if r.top() < clip.top() + margin || r.bottom() > clip.bottom() - margin

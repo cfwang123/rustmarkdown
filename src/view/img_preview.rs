@@ -134,14 +134,18 @@ pub fn show(ctx: &Context, st: &mut ImgPreview) -> Option<OverlayAction> {
             let chrome = Color32::from_rgba_unmultiplied(0, 0, 0, 0xB0);
             ui.painter().rect_filled(bot, 0.0, chrome);
 
-            ui.scope_builder(egui::UiBuilder::new().max_rect(close_r), |ui| {
+            ui.scope_builder(
+                egui::UiBuilder::new().id_salt("img_close").max_rect(close_r),
+                |ui| {
                 let tip = crate::i18n::close_esc(&st.title);
                 if close_btn(ui, &tip).clicked() {
                     close = true;
                 }
             });
 
-            ui.scope_builder(egui::UiBuilder::new().max_rect(bot), |ui| {
+            ui.scope_builder(
+                egui::UiBuilder::new().id_salt("img_bot").max_rect(bot),
+                |ui| {
                 ui.allocate_ui_with_layout(
                     bot.size(),
                     Layout::left_to_right(Align::Center),

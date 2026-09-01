@@ -172,6 +172,7 @@ pub fn pane_ui(ui: &mut egui::Ui) -> egui::Ui {
     ui.advance_cursor_after_rect(rect);
     let mut child = ui.new_child(
         egui::UiBuilder::new()
+            .id_salt("pane")
             .max_rect(rect)
             .layout(egui::Layout::top_down(egui::Align::Min)),
     );

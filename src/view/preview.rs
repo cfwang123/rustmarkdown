@@ -392,7 +392,9 @@ pub fn show_paged(
                 let row_w = page_w.max(avail_w);
                 let (row_rect, _) = ui.allocate_exact_size(vec2(row_w, page_h), Sense::hover());
                 let page_rect = Rect::from_center_size(row_rect.center(), vec2(page_w, page_h));
-                ui.scope_builder(UiBuilder::new().max_rect(page_rect), |ui| {
+                ui.scope_builder(
+                    UiBuilder::new().id_salt(("word_page", pi)).max_rect(page_rect),
+                    |ui| {
                     ui.set_clip_rect(page_rect.intersect(pane_clip));
                     ui.set_min_size(vec2(page_w, page_h));
                     ui.set_max_size(vec2(page_w, page_h));
@@ -1403,7 +1405,8 @@ fn show_table(
         let mut col_xs: Vec<f32> = Vec::new();
         for (ri, row) in b.table_rows.iter().enumerate() {
             let bg_idx = ui.painter().add(Shape::Noop);
-            let row_out = ui.allocate_ui_with_layout(
+            let row_out = ui.push_id(ri, |ui| {
+            ui.allocate_ui_with_layout(
                 Vec2::new(table_w, 0.0),
                 egui::Layout::left_to_right(egui::Align::Min),
                 |ui| {
@@ -1412,7 +1415,8 @@ fn show_table(
                         let cell = row.get(ci).map(|s| s.as_str()).unwrap_or("");
                         let w = widths.get(ci).copied().unwrap_or(80.0);
                         let align = b.table_align.get(ci).copied().unwrap_or(TableAlign::Left);
-                        let cell_out = ui.allocate_ui_with_layout(
+                        let cell_out = ui.push_id(ci, |ui| {
+                        ui.allocate_ui_with_layout(
                             Vec2::new(w, 0.0),
                             egui::Layout::top_down(egui::Align::Min),
                             |ui| {
@@ -1475,17 +1479,19 @@ fn show_table(
                                 });
                                 ui.add_space(6.0);
                             },
-                        );
+                        )
+                        });
                         if ri == 0 {
                             if ci == 0 {
-                                col_xs.push(cell_out.response.rect.left());
+                                col_xs.push(cell_out.inner.response.rect.left());
                             }
-                            col_xs.push(cell_out.response.rect.right());
+                            col_xs.push(cell_out.inner.response.rect.right());
                         }
                     }
                 },
-            );
-            let row_rect = row_out.response.rect;
+            )
+            });
+            let row_rect = row_out.inner.response.rect;
             let fill = if ri == 0 { head_bg } else { Color32::WHITE };
             ui.painter()
                 .set(bg_idx, egui::epaint::RectShape::filled(row_rect, 0.0, fill));
@@ -2448,6 +2454,32 @@ mod tests {
             pick_text.contains(want) || pick_text.replace(' ', "") == want.replace(' ', ""),
             "got={pick_text:?}"
         );
+    }
+
+    #[test]
+    fn table_row_push_id_keeps_cell_widget_ids_unique() {
+        let ctx = egui::Context::default();
+        crate::view::theme::install_fonts(&ctx);
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 700.0)));
+        let mut ids = Vec::new();
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                ui.push_id("table", |ui| {
+                    for ri in 0..3 {
+                        ui.push_id(ri, |ui| {
+                            let r = ui.add(
+                                Label::new("密码.md").sense(egui::Sense::click()),
+                            );
+                            ids.push(r.id);
+                        });
+                    }
+                });
+            });
+        });
+        assert_eq!(ids.len(), 3);
+        assert_ne!(ids[0], ids[1], "表格行要用 push_id，否则相同单元格文字会撞 widget id");
+        assert_ne!(ids[1], ids[2]);
     }
 
     #[test]

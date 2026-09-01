@@ -2195,6 +2195,7 @@ impl App {
 
             ui.scope_builder(
                 egui::UiBuilder::new()
+                    .id_salt("sidebar")
                     .max_rect(side)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
                 |ui| {
@@ -2230,6 +2231,7 @@ impl App {
 
         ui.scope_builder(
             egui::UiBuilder::new()
+                .id_salt("doc_pane")
                 .max_rect(content)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
             |ui| {
@@ -2489,6 +2491,7 @@ impl App {
         let mut href = None;
         ui.scope_builder(
             egui::UiBuilder::new()
+                .id_salt("side_editor")
                 .max_rect(left)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
             |ui| {
@@ -2543,6 +2546,7 @@ impl App {
 
         ui.scope_builder(
             egui::UiBuilder::new()
+                .id_salt("side_preview")
                 .max_rect(right)
                 .layout(egui::Layout::top_down(egui::Align::Min)),
             |ui| {
@@ -3905,6 +3909,115 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.persist_session();
         self.flush_session(None, true);
+    }
+}
+
+#[cfg(test)]
+mod pane_id_tests {
+    use egui::{pos2, vec2, Sense, UiBuilder};
+
+    /// 并排窗格必须给不同 id_salt，否则 ScrollArea / 自动 id 可能撞号。
+    #[test]
+    fn sibling_scopes_need_id_salt() {
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0)));
+        let mut salt = (None, None);
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let full = ui.available_rect_before_wrap();
+                ui.advance_cursor_after_rect(full);
+                let left = egui::Rect::from_min_size(full.min, vec2(200.0, full.height()));
+                let right = egui::Rect::from_min_max(pos2(204.0, full.top()), full.max);
+                ui.scope_builder(
+                    UiBuilder::new().id_salt("sidebar").max_rect(left),
+                    |ui| {
+                        let (_, r) = ui.allocate_exact_size(vec2(80.0, 22.0), Sense::click());
+                        salt.0 = Some(r.id);
+                    },
+                );
+                ui.scope_builder(
+                    UiBuilder::new().id_salt("doc_pane").max_rect(right),
+                    |ui| {
+                        let (_, r) = ui.allocate_exact_size(vec2(80.0, 22.0), Sense::click());
+                        salt.1 = Some(r.id);
+                    },
+                );
+            });
+        });
+        assert_ne!(salt.0, salt.1, "侧栏/正文必须有各自 id_salt");
+        assert!(salt.0.is_some() && salt.1.is_some());
+    }
+
+    fn shape_has_id_clash(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Text(t) => {
+                let s = t.galley.text();
+                s.contains("widget ID") || s.contains("First use of") || s.contains("ID clash")
+            }
+            egui::Shape::Vec(v) => v.iter().any(shape_has_id_clash),
+            _ => false,
+        }
+    }
+
+    /// 对齐截图：左侧资源管理器 + 右侧预览表格，不应再刷 widget ID clash。
+    #[test]
+    fn explorer_and_preview_table_no_id_clash() {
+        let ctx = egui::Context::default();
+        crate::view::theme::install_fonts(&ctx);
+        ctx.options_mut(|o| o.warn_on_id_clash = true);
+        let dir = std::env::temp_dir().join("rustmarkdown-id-clash");
+        let _ = std::fs::create_dir_all(dir.join("php"));
+        let _ = std::fs::create_dir_all(dir.join("python"));
+        let _ = std::fs::create_dir_all(dir.join("Test"));
+        let mut ws = crate::workspace::Workspace::new(dir.clone());
+        let md = "| 编号 | 名称 | 路径 |\n| --- | --- | --- |\n| E2026108 | 海滨油库 | 8海滨油库预约系统\\密码.md |\n| E2025272 | 天津渤化2 | 2天津渤化\\BH\\密码.md |\n| E2025242 | 扬子嘉盛 | 密码.md |\n";
+        let doc = crate::parser::parse(md);
+        let mut st = crate::view::preview::PreviewState::default();
+        let mut img = crate::io::imgcache::ImgCache::default();
+        let mut mermaid = crate::io::mermaid::MermaidCache::default();
+        let opts = crate::view::preview::PreviewOpts::default();
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(1100.0, 700.0)));
+        raw.focused = true;
+        let output = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let full = ui.available_rect_before_wrap();
+                ui.advance_cursor_after_rect(full);
+                let left = egui::Rect::from_min_size(full.min, vec2(220.0, full.height()));
+                let right = egui::Rect::from_min_max(pos2(224.0, full.top()), full.max);
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .id_salt("sidebar")
+                        .max_rect(left)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui| {
+                        ui.set_clip_rect(left);
+                        let _ = crate::workspace::show(ui, &mut ws);
+                    },
+                );
+                ui.scope_builder(
+                    UiBuilder::new()
+                        .id_salt("doc_pane")
+                        .max_rect(right)
+                        .layout(egui::Layout::top_down(egui::Align::Min)),
+                    |ui| {
+                        ui.set_clip_rect(right);
+                        let mut ev = Vec::new();
+                        crate::view::preview::show(
+                            ui, &doc, &mut st, &mut img, &mut mermaid, None, &mut ev, opts, None,
+                            None,
+                        );
+                    },
+                );
+            });
+        });
+        let clash = output
+            .shapes
+            .iter()
+            .any(|cs| shape_has_id_clash(&cs.shape));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(!clash, "侧栏+预览表格不应出现 widget ID clash");
     }
 }
 

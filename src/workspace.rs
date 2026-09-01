@@ -260,7 +260,7 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
     }
     let mut action = None;
     let ents = ws.children_of(dir).to_vec();
-    for ent in ents {
+    for (i, ent) in ents.into_iter().enumerate() {
         let selected = ws.selected.as_ref().is_some_and(|p| p == &ent.path);
         let open = ent.is_dir && ws.expanded.contains(&ent.path);
         let kind = if ent.is_dir {
@@ -292,6 +292,7 @@ fn show_dir(ui: &mut Ui, ws: &mut Workspace, dir: &Path, depth: u32) -> Option<E
             &ent.name,
             color,
             &ent.path,
+            (dir, i),
         );
         if hit.chevron {
             if open {
@@ -377,11 +378,15 @@ fn tree_row(
     name: &str,
     color: Color32,
     path: &Path,
+    id_salt: impl std::hash::Hash,
 ) -> RowHit {
     let h = 22.0;
     let w = ui.available_width().max(48.0);
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
-    resp = resp.on_hover_cursor(CursorIcon::Default);
+    let id = ui.id().with(id_salt);
+    let (_, rect) = ui.allocate_space(vec2(w, h));
+    let mut resp = ui
+        .interact(rect, id, Sense::click())
+        .on_hover_cursor(CursorIcon::Default);
     let visible = rect.intersects(ui.clip_rect());
     if !visible {
         return RowHit {
@@ -413,7 +418,7 @@ fn tree_row(
     if is_dir {
         let chev_rect = Rect::from_min_size(pos2(x, rect.top()), vec2(16.0, h));
         let chev = ui
-            .interact(chev_rect, ui.id().with(path).with("chev"), Sense::click())
+            .interact(chev_rect, id.with("chev"), Sense::click())
             .on_hover_cursor(CursorIcon::Default);
         let tri_r = Rect::from_center_size(chev_rect.center(), vec2(10.0, 10.0));
         icons::paint_tree_chevron(
@@ -519,6 +524,39 @@ fn commit_path_edit(ws: &mut Workspace) -> Option<ExplorerAction> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tree_row_ids_follow_path() {
+        let ctx = egui::Context::default();
+        crate::view::theme::install_fonts(&ctx);
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(400.0, 400.0),
+        ));
+        let mut ids = Vec::new();
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                for name in ["php", "python"] {
+                    let p = PathBuf::from(format!(r"D:\{name}"));
+                    let hit = tree_row(
+                        ui,
+                        0,
+                        RowKind::Dir,
+                        false,
+                        false,
+                        name,
+                        DIR_FG,
+                        &p,
+                        (name, 0usize),
+                    );
+                    ids.push(hit.resp.id);
+                }
+            });
+        });
+        assert_eq!(ids.len(), 2);
+        assert_ne!(ids[0], ids[1], "资源管理器行 id 必须跟路径走");
+    }
 
     #[test]
     fn skips_dotfiles() {
