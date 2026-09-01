@@ -36,3 +36,10 @@ winresource = "0.1"
 
 [target."cfg(windows)".dependencies]
 clipboard-win = { version = "5.4.1", features = ["std"] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }

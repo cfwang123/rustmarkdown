@@ -29,6 +29,168 @@ pub fn viewport_title(tab_title: Option<&str>) -> String {
     }
 }
 
+fn app_icon() -> Option<std::sync::Arc<egui::IconData>> {
+    static ICON: std::sync::OnceLock<Option<std::sync::Arc<egui::IconData>>> =
+        std::sync::OnceLock::new();
+    ICON.get_or_init(|| {
+        eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+            .ok()
+            .map(std::sync::Arc::new)
+    })
+    .clone()
+}
+
+/// 在 Windows 上把子窗口设为根窗口的 owned window（GWLP_HWNDPARENT），
+/// 使子窗口始终显示在根窗口之上，不会被根窗口挡住；根窗口最小化时子窗口随之隐藏。
+/// 逐帧重试直到两个窗口都枚举到（子 viewport 创建有延迟，幂等）。
+#[cfg(target_os = "windows")]
+fn adopt_child_window(root_title: &str, child_title: &str) {
+    use windows_sys::Win32::Foundation::{HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::GetCurrentProcessId;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
+        GWLP_HWNDPARENT, SetWindowLongPtrW,
+    };
+
+    struct AdoptCache {
+        root: isize,
+        children: std::collections::HashMap<String, isize>,
+    }
+
+    struct Collect {
+        pid: u32,
+        root_title: String,
+        child_title: String,
+        root_hwnd: HWND,
+        child_hwnd: HWND,
+    }
+
+    unsafe extern "system" fn collect_proc(hwnd: HWND, lparam: LPARAM) -> i32 {
+        unsafe {
+            let collect = &mut *(lparam as *mut Collect);
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, &mut pid);
+            if pid != collect.pid {
+                return 1;
+            }
+            let mut buffer = [0u16; 256];
+            let len = GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32);
+            if len <= 0 {
+                return 1;
+            }
+            let title = String::from_utf16_lossy(&buffer[..len as usize]);
+            if collect.root_hwnd.is_null() && title == collect.root_title {
+                collect.root_hwnd = hwnd;
+            } else if title == collect.child_title && collect.child_hwnd.is_null() {
+                collect.child_hwnd = hwnd;
+            }
+            1
+        }
+    }
+
+    unsafe {
+        static CACHE: std::sync::LazyLock<std::sync::Mutex<AdoptCache>> =
+            std::sync::LazyLock::new(|| {
+                std::sync::Mutex::new(AdoptCache {
+                    root: 0,
+                    children: std::collections::HashMap::new(),
+                })
+            });
+        let mut cache = CACHE.lock().expect("adopt cache poisoned");
+        let root = if cache.root != 0 && IsWindow(cache.root as HWND) != 0 {
+            cache.root
+        } else {
+            0
+        };
+        if root != 0 {
+            if let Some(&child) = cache.children.get(child_title) {
+                if child != 0 && IsWindow(child as HWND) != 0 {
+                    let owner = GetWindowLongPtrW(child as HWND, GWLP_HWNDPARENT);
+                    if owner == root {
+                        return;
+                    }
+                }
+            }
+        }
+        let pid = GetCurrentProcessId();
+        let mut collect = Collect {
+            pid,
+            root_title: root_title.to_owned(),
+            child_title: child_title.to_owned(),
+            root_hwnd: std::ptr::null_mut(),
+            child_hwnd: std::ptr::null_mut(),
+        };
+        EnumWindows(Some(collect_proc), &mut collect as *mut Collect as isize);
+        if !collect.root_hwnd.is_null() {
+            cache.root = collect.root_hwnd as isize;
+        }
+        if !collect.child_hwnd.is_null() {
+            cache
+                .children
+                .insert(child_title.to_owned(), collect.child_hwnd as isize);
+        }
+        if !collect.root_hwnd.is_null() && !collect.child_hwnd.is_null() {
+            let owner = GetWindowLongPtrW(collect.child_hwnd, GWLP_HWNDPARENT);
+            if owner != collect.root_hwnd as isize {
+                SetWindowLongPtrW(
+                    collect.child_hwnd,
+                    GWLP_HWNDPARENT,
+                    collect.root_hwnd as isize,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn adopt_child_window(_root_title: &str, _child_title: &str) {}
+
+const SETTINGS_VIEWPORT: &str = "settings-window";
+
+fn native_dialog(
+    context: &egui::Context,
+    id: &str,
+    title: impl Into<String>,
+    root_title: &str,
+    size: [f32; 2],
+    min_size: [f32; 2],
+    resizable: bool,
+    mut add_contents: impl FnMut(&mut egui::Ui),
+) -> bool {
+    let title_string = title.into();
+    let mut closed = false;
+    let mut builder = ViewportBuilder::default()
+        .with_title(title_string.clone())
+        .with_inner_size(size)
+        .with_min_inner_size(min_size)
+        .with_resizable(resizable)
+        .with_maximize_button(resizable)
+        .with_minimize_button(false)
+        .with_taskbar(false);
+    if let Some(icon) = app_icon() {
+        builder = builder.with_icon(icon);
+    }
+    context.show_viewport_immediate(
+        ViewportId::from_hash_of(id),
+        builder,
+        |ctx, class| {
+            egui::CentralPanel::default()
+                .frame(
+                    egui::Frame::central_panel(&ctx.style())
+                        .inner_margin(egui::Margin::same(12)),
+                )
+                .show(ctx, |ui| add_contents(ui));
+            if class == egui::ViewportClass::Immediate
+                && ctx.input(|input| input.viewport().close_requested())
+            {
+                closed = true;
+            }
+        },
+    );
+    adopt_child_window(root_title, &title_string);
+    closed
+}
+
 fn file_label(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -227,6 +389,7 @@ pub struct App {
     pending_img: Option<PendingImg>,
     settings: Settings,
     settings_draft: Option<Settings>,
+    settings_need_focus: bool,
     last_session: Option<Session>,
     file_views: Vec<SessionTab>,
     session_save_at: Option<Instant>,
@@ -265,6 +428,7 @@ impl App {
             pending_img: None,
             settings: Settings::load(),
             settings_draft: None,
+            settings_need_focus: false,
             last_session: None,
             file_views: Vec::new(),
             session_save_at: None,
@@ -1351,7 +1515,10 @@ impl App {
     }
 
     fn open_settings(&mut self) {
-        self.settings_draft = Some(self.settings.clone());
+        if self.settings_draft.is_none() {
+            self.settings_draft = Some(self.settings.clone());
+        }
+        self.settings_need_focus = true;
     }
 
     fn apply_settings(&mut self, mut draft: Settings) {
@@ -2899,17 +3066,33 @@ impl App {
         if let Some(d) = &self.settings_draft {
             i18n::set(d.ui_lang);
         }
-        let mut open = true;
         let mut apply = false;
         let mut cancel = false;
         let notes = t().settings_notes;
-        egui::Window::new(t().settings)
-            .collapsible(false)
-            .resizable(true)
-            .default_size([480.0, 420.0])
-            .open(&mut open)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+        let title = t().settings.to_string();
+        let root_title = viewport_title(
+            self.wins
+                .first()
+                .and_then(|w| w.active_tab())
+                .map(|tab| tab.title())
+                .as_deref(),
+        );
+        let need_focus = self.settings_need_focus;
+        let closed = native_dialog(
+            ctx,
+            SETTINGS_VIEWPORT,
+            title,
+            &root_title,
+            [500.0, 540.0],
+            [400.0, 360.0],
+            true,
+            |ui| {
+                if need_focus {
+                    ui.ctx().send_viewport_cmd(ViewportCommand::Focus);
+                }
+                if ui.input(|i| i.key_pressed(Key::Escape)) {
+                    cancel = true;
+                }
                 let Some(draft) = self.settings_draft.as_mut() else {
                     return;
                 };
@@ -2984,11 +3167,13 @@ impl App {
                         }
                     });
                 });
-            });
-        if ctx.input(|i| i.key_pressed(Key::Escape)) {
+            },
+        );
+        self.settings_need_focus = false;
+        if closed {
             cancel = true;
         }
-        if !open || cancel {
+        if cancel {
             i18n::set(self.settings.ui_lang);
             self.settings_draft = None;
         } else if apply {
@@ -3450,7 +3635,7 @@ impl App {
     fn ui_window(&mut self, ctx: &egui::Context, win_i: usize) {
         self.cur = win_i;
         self.note_pointer(ctx);
-        if self.dialog.is_none() && self.settings_draft.is_none() && self.img_overlay.is_none() {
+        if self.dialog.is_none() && self.img_overlay.is_none() {
             self.handle_shortcuts(ctx);
         }
         let ts = self.settings.md_tab_size;
@@ -3563,8 +3748,8 @@ impl eframe::App for App {
         self.poll_watch();
         self.poll_pending_img(ctx);
         self.show_dialogs(ctx);
-        self.show_settings(ctx);
         self.ui_window(ctx, 0);
+        self.show_settings(ctx);
         self.show_img_overlay(ctx);
         if self.drop_hint {
             egui::Area::new(egui::Id::new("drop_hint"))
@@ -3649,5 +3834,75 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.persist_session();
         self.flush_session(None, true);
+    }
+}
+
+#[cfg(all(target_os = "windows", test))]
+mod adopt_window_tests {
+    use super::adopt_child_window;
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DefWindowProcW, DestroyWindow, GetWindowLongPtrW, RegisterClassW,
+        UnregisterClassW, CW_USEDEFAULT, GWLP_HWNDPARENT, WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    };
+
+    #[test]
+    fn adopts_settings_dialog_of_titled_root_window() {
+        unsafe {
+            let class_name: Vec<u16> = "RmAdoptTest\0".encode_utf16().collect();
+            let hinstance = GetModuleHandleW(std::ptr::null());
+            let wc = WNDCLASSW {
+                style: 0,
+                lpfnWndProc: Some(DefWindowProcW),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: hinstance,
+                hIcon: std::ptr::null_mut(),
+                hCursor: std::ptr::null_mut(),
+                hbrBackground: std::ptr::null_mut(),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: class_name.as_ptr(),
+            };
+            assert_ne!(RegisterClassW(&wc), 0, "RegisterClassW failed");
+            let root_title: Vec<u16> = "2026年.md — rustmarkdown v1.0.1\0"
+                .encode_utf16()
+                .collect();
+            let child_title: Vec<u16> = "参数设置\0".encode_utf16().collect();
+            let root = CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                root_title.as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                hinstance,
+                std::ptr::null(),
+            );
+            let child = CreateWindowExW(
+                0,
+                class_name.as_ptr(),
+                child_title.as_ptr(),
+                WS_OVERLAPPEDWINDOW,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                CW_USEDEFAULT,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                hinstance,
+                std::ptr::null(),
+            );
+            assert!(!root.is_null() && !child.is_null(), "CreateWindowExW failed");
+            adopt_child_window("2026年.md — rustmarkdown v1.0.1", "参数设置");
+            let owner = GetWindowLongPtrW(child, GWLP_HWNDPARENT);
+            assert_eq!(owner, root as isize, "child was not adopted by root");
+            let _ = DestroyWindow(child);
+            let _ = DestroyWindow(root);
+            let _ = UnregisterClassW(class_name.as_ptr(), hinstance);
+        }
     }
 }
