@@ -110,7 +110,6 @@ pub fn trim_ws_range(text: &str, start: usize, end: usize) -> (usize, usize) {
 }
 
 /// 预览 galley 里光标所在的视觉行（折行后的一行）。
-#[allow(dead_code)]
 pub fn visual_row_range(galley: &Galley, char_idx: usize) -> (usize, usize) {
     let mut i = 0usize;
     let mut last = (0usize, 0usize);
@@ -134,6 +133,22 @@ pub fn range_at(text: &str, char_idx: usize, triple: bool) -> CCursorRange {
     };
     let (a, b) = trim_ws_range(text, a, b);
     CCursorRange::two(CCursor::new(a), CCursor::new(b))
+}
+
+/// 预览：双击按分隔符扩词；三击选中当前视觉行（折行后的一行）。
+pub fn range_at_galley(galley: &Galley, char_idx: usize, triple: bool) -> CCursorRange {
+    let text = galley.text();
+    let (a, b) = if triple {
+        visual_row_range(galley, char_idx)
+    } else {
+        expand_token(text, char_idx)
+    };
+    let (a, b) = trim_ws_range(text, a, b);
+    CCursorRange::two(CCursor::new(a), CCursor::new(b))
+}
+
+fn slice_chars(text: &str, a: usize, b: usize) -> String {
+    text.chars().skip(a).take(b.saturating_sub(a)).collect()
 }
 
 #[derive(Clone, Copy)]
@@ -263,7 +278,31 @@ pub fn should_clear_sticky(ui: &Ui) -> bool {
     })
 }
 
-/// 预览 Label 选区。双击帧不走 egui 分词（空 galley 上会 usize 下溢崩 Debug）。
+const PREVIEW_STICKY_ID: &str = "preview_click_sel";
+
+#[derive(Clone)]
+pub struct PreviewClickSel {
+    pub id: Id,
+    pub range: CCursorRange,
+    pub text: String,
+}
+
+pub fn preview_click_sel(ui: &Ui) -> Option<PreviewClickSel> {
+    ui.ctx()
+        .data(|d| d.get_temp(Id::new(PREVIEW_STICKY_ID)))
+}
+
+pub fn clear_preview_click_sel(ui: &Ui) {
+    ui.ctx()
+        .data_mut(|d| d.remove::<PreviewClickSel>(Id::new(PREVIEW_STICKY_ID)));
+}
+
+fn set_preview_click_sel(ui: &Ui, sel: PreviewClickSel) {
+    ui.ctx()
+        .data_mut(|d| d.insert_temp(Id::new(PREVIEW_STICKY_ID), sel));
+}
+
+/// 预览 Label 选区。双击扩词、三击选视觉行（与源码分隔符规则一致）；空 galley 多击帧不走 egui 分词。
 pub fn paint_selectable_galley(
     ui: &Ui,
     response: &Response,
@@ -272,15 +311,79 @@ pub fn paint_selectable_galley(
     color: Color32,
     underline: Stroke,
 ) {
-    let multi = ui.input(|i| {
-        i.pointer.button_double_clicked(PointerButton::Primary)
-            || i.pointer.button_triple_clicked(PointerButton::Primary)
+    let text = galley.text();
+    let empty = text.is_empty();
+    let (click_n, pressed, pointer) = ui.input(|i| {
+        let n = if i.pointer.button_triple_clicked(PointerButton::Primary) {
+            3
+        } else if i.pointer.button_double_clicked(PointerButton::Primary) {
+            2
+        } else {
+            0
+        };
+        let pos = i
+            .pointer
+            .interact_pos()
+            .or(i.pointer.hover_pos())
+            .or(i.pointer.latest_pos());
+        (n, i.pointer.primary_pressed(), pos)
     });
-    if multi {
+
+    if pressed && click_n < 2 {
+        clear_preview_click_sel(ui);
+    }
+
+    if !empty && click_n >= 2 && response.contains_pointer() {
+        if let Some(pos) = pointer {
+            let idx = galley.cursor_from_pos(pos - galley_pos).index;
+            let range = range_at_galley(galley.as_ref(), idx, click_n >= 3);
+            let [a, b] = range.sorted_cursors();
+            let selected = slice_chars(text, a.index, b.index);
+            set_preview_click_sel(
+                ui,
+                PreviewClickSel {
+                    id: response.id,
+                    range,
+                    text: selected,
+                },
+            );
+            ui.ctx()
+                .plugin::<LabelSelectionState>()
+                .lock()
+                .clear_selection();
+        }
+    }
+
+    if let Some(sel) = preview_click_sel(ui).filter(|s| s.id == response.id) {
+        let clip = ui.clip_rect();
+        let bg = crate::view::md_hl::selection_bgs(
+            galley.as_ref(),
+            galley_pos,
+            clip,
+            sel.range,
+            ui.visuals().selection.bg_fill,
+        );
+        ui.painter().add(bg);
+        ui.painter().galley(galley_pos, galley, color);
+        let _ = underline;
+        if ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Copy))) {
+            if !sel.text.is_empty() {
+                ui.ctx().copy_text(sel.text.clone());
+                ui.ctx().input_mut(|i| {
+                    i.events.retain(|e| !matches!(e, Event::Copy));
+                });
+            }
+        }
+        return;
+    }
+
+    if empty && click_n >= 2 {
+        // 空 galley 上 egui 双击分词会 usize 下溢崩 Debug。
         ui.painter().galley(galley_pos, galley, color);
         let _ = underline;
         return;
     }
+
     LabelSelectionState::label_text_selection(ui, response, galley_pos, galley, color, underline);
 }
 

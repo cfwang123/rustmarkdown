@@ -236,8 +236,7 @@ pub fn show(
     if ui.input(|i| i.pointer.primary_pressed()) {
         st.pick_lines = None;
         st.pick_anchor = None;
-        ui.ctx()
-            .data_mut(|d| d.remove::<PreviewLinePick>(egui::Id::new("preview_line_pick")));
+        crate::view::text_sel::clear_preview_click_sel(&ui);
     }
     let max_h = ui.available_height();
     let nav = crate::view::consume_key_nav(&mut ui);
@@ -425,8 +424,6 @@ fn sel_gap_size(ui: &mut Ui, w: f32, h: f32) {
             Stroke::NONE,
         );
     }
-    // gap 可起选/触发双击，但不进双击高亮 rect（避免短行右侧空白铺蓝）。
-    span_group_note(ui, &response, false);
     // 单击空白不留选区；按住拖过才选中中间正文。
     if response.clicked() && !response.double_clicked() && !response.triple_clicked() {
         ui.ctx()
@@ -1714,7 +1711,6 @@ fn add_sel_label(ui: &mut Ui, lab: Label) -> egui::Response {
             Stroke::NONE,
         );
     }
-    span_group_note(ui, &response, true);
     response
 }
 
@@ -1754,129 +1750,6 @@ fn paint_code_chip(
         CODE_FG,
         Stroke::NONE,
     );
-    span_group_note(ui, &response, true);
-}
-
-fn spans_plain_text(spans: &[MdSpan]) -> String {
-    let mut s = String::new();
-    for sp in spans {
-        match sp.kind {
-            MdSpanKind::SoftBr => s.push('\n'),
-            MdSpanKind::Image => {}
-            _ => s.push_str(&sp.text),
-        }
-    }
-    s
-}
-
-#[derive(Clone)]
-struct SpanGroupAcc {
-    id: egui::Id,
-    bg: egui::layers::ShapeIdx,
-    rects: Vec<Rect>,
-    dbl: bool,
-}
-
-#[derive(Clone)]
-struct PreviewLinePick {
-    id: egui::Id,
-    text: String,
-}
-
-fn span_group_begin(ui: &Ui, id: egui::Id) {
-    let bg = ui.painter().add(Shape::Noop);
-    ui.ctx().data_mut(|d| {
-        let key = egui::Id::new("preview_span_stack");
-        let mut stack = d.get_temp::<Vec<SpanGroupAcc>>(key).unwrap_or_default();
-        stack.push(SpanGroupAcc {
-            id,
-            bg,
-            rects: Vec::new(),
-            dbl: false,
-        });
-        d.insert_temp(key, stack);
-    });
-}
-
-/// `paint`：是否计入双击高亮矩形。正文 true；行尾/块间 gap false（仍可触发 dbl）。
-fn span_group_note(ui: &Ui, resp: &egui::Response, paint: bool) {
-    let dbl = resp.double_clicked() || resp.triple_clicked();
-    let rect = resp.rect;
-    ui.ctx().data_mut(|d| {
-        let key = egui::Id::new("preview_span_stack");
-        if let Some(mut stack) = d.get_temp::<Vec<SpanGroupAcc>>(key) {
-            if let Some(acc) = stack.last_mut() {
-                if paint {
-                    acc.rects.push(rect);
-                }
-                if dbl {
-                    acc.dbl = true;
-                }
-            }
-            d.insert_temp(key, stack);
-        }
-    });
-}
-
-fn span_group_end(ui: &Ui, text: &str) {
-    let acc = ui.ctx().data_mut(|d| {
-        let key = egui::Id::new("preview_span_stack");
-        let mut stack = d.get_temp::<Vec<SpanGroupAcc>>(key).unwrap_or_default();
-        let v = stack.pop();
-        if stack.is_empty() {
-            d.remove::<Vec<SpanGroupAcc>>(key);
-        } else {
-            d.insert_temp(key, stack);
-        }
-        v
-    });
-    let Some(acc) = acc else {
-        return;
-    };
-    let pick_key = egui::Id::new("preview_line_pick");
-    let mut pick = ui
-        .ctx()
-        .data(|d| d.get_temp::<PreviewLinePick>(pick_key));
-    if acc.dbl {
-        pick = Some(PreviewLinePick {
-            id: acc.id,
-            text: text.trim().to_string(),
-        });
-        ui.ctx()
-            .plugin::<LabelSelectionState>()
-            .lock()
-            .clear_selection();
-    }
-    let active = pick.as_ref().is_some_and(|p| p.id == acc.id);
-    if active {
-        let mut shapes: Vec<Shape> = Vec::new();
-        let clip = ui.clip_rect();
-        for r in &acc.rects {
-            let r = r.intersect(clip);
-            if r.width() > 0.5 && r.height() > 0.5 {
-                shapes.push(Shape::rect_filled(r, 0.0, SEL_BG));
-            }
-        }
-        let shape = match shapes.len() {
-            0 => Shape::Noop,
-            1 => shapes.remove(0),
-            _ => Shape::Vec(shapes),
-        };
-        ui.painter().set(acc.bg, shape);
-        if ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Copy))) {
-            if let Some(p) = &pick {
-                ui.ctx().copy_text(p.text.clone());
-                ui.ctx().input_mut(|i| {
-                    i.events.retain(|e| !matches!(e, egui::Event::Copy));
-                });
-            }
-        }
-    } else {
-        ui.painter().set(acc.bg, Shape::Noop);
-    }
-    if let Some(p) = pick {
-        ui.ctx().data_mut(|d| d.insert_temp(pick_key, p));
-    }
 }
 
 fn show_spans(
@@ -1891,9 +1764,6 @@ fn show_spans(
     strong: bool,
     hint: &str,
 ) {
-    let plain = spans_plain_text(spans);
-    let gid = ui.id().with("span_group").with(&plain);
-    span_group_begin(ui, gid);
     let already_wrap = ui.layout().is_horizontal() && ui.layout().main_wrap();
     let mut add = |ui: &mut Ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -1913,7 +1783,6 @@ fn show_spans(
     } else {
         text_flow(ui, add);
     }
-    span_group_end(ui, &plain);
 }
 
 fn one_span(
@@ -2180,7 +2049,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_double_click_does_not_panic() {
+    fn preview_double_click_selects_token_not_paragraph() {
         let ctx = egui::Context::default();
         crate::view::theme::install_fonts(&ctx);
         let doc = parser::parse(
@@ -2190,7 +2059,6 @@ mod tests {
         let mut img = crate::io::imgcache::ImgCache::default();
         let mut mermaid = crate::io::mermaid::MermaidCache::default();
         let opts = PreviewOpts::default();
-        let want = "E2025242扬子嘉盛：4台电脑安装常用软件、系统更新、驱动更新（90%）。";
         let mut t = 0.0_f64;
         let mut step = |events: Vec<egui::Event>, pos: egui::Pos2| -> String {
             let mut evs = events;
@@ -2211,7 +2079,9 @@ mod tests {
                     );
                 });
                 if let Some(p) = ctx.data(|d| {
-                    d.get_temp::<PreviewLinePick>(egui::Id::new("preview_line_pick"))
+                    d.get_temp::<crate::view::text_sel::PreviewClickSel>(egui::Id::new(
+                        "preview_click_sel",
+                    ))
                 }) {
                     pick_text = p.text;
                 }
@@ -2235,7 +2105,7 @@ mod tests {
                 let _ = step(vec![btn(click, true)], click);
                 let _ = step(vec![btn(click, false)], click);
                 pick_text = step(vec![], click);
-                if pick_text.contains("扬子嘉盛") && pick_text.contains("90%") {
+                if !pick_text.is_empty() {
                     ok = true;
                     break;
                 }
@@ -2244,17 +2114,14 @@ mod tests {
                 break;
             }
         }
+        assert!(ok, "预览双击应选出词，got={pick_text:?}");
         assert!(
-            ok,
-            "预览双击应选中整条列表项，got={pick_text:?} want contains 扬子嘉盛/90%"
+            !pick_text.contains("90%") || !pick_text.contains("扬子嘉盛"),
+            "双击不应选中整段列表项，got={pick_text:?}"
         );
         assert!(
-            !pick_text.contains(" 台"),
-            "复制文本不应在数字和汉字之间多空格: {pick_text:?}"
-        );
-        assert!(
-            pick_text.contains(want) || pick_text.replace(' ', "") == want.replace(' ', ""),
-            "got={pick_text:?}"
+            pick_text.chars().count() < 40,
+            "双击选区应明显短于整段，got={pick_text:?}"
         );
     }
 
