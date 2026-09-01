@@ -4,6 +4,7 @@ pub mod table;
 
 pub use heading_num::HeadingNumber;
 pub use inline::parse_inlines;
+pub(crate) use inline::{try_fs_path, try_http_url};
 
 use regex::Regex;
 use std::collections::HashMap;

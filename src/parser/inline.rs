@@ -155,31 +155,14 @@ pub fn parse_inlines(text: &str) -> Vec<MdSpan> {
                 }
             }
         }
-        if c == b'h' && (text[i..].starts_with("http://") || text[i..].starts_with("https://")) {
-            let mut j = i;
-            while j < n {
-                let b = text.as_bytes()[j];
-                if b.is_ascii_whitespace() || b == b')' {
-                    break;
-                }
-                j += 1;
-            }
-            while j > i {
-                let prev = text.as_bytes()[j - 1];
-                if matches!(prev, b'.' | b',' | b';' | b':') {
-                    j -= 1;
-                } else {
-                    break;
-                }
-            }
-            let url = text[i..j].to_string();
+        if let Some((end, url)) = try_http_url(text, i) {
             flush(&mut buf, &mut spans);
             spans.push(MdSpan {
                 kind: MdSpanKind::Link,
                 text: url.clone(),
                 href: url,
             });
-            i = j;
+            i = end;
             continue;
         }
         if let Some((end, target)) = try_fs_path(text, i) {
@@ -205,12 +188,43 @@ const PATH_STOP_ASCII: &[u8] = b"()<>\"'`|[]{}?#";
 /// 全角标点同样打断扫描（中文正文里路径常用它们收尾）。
 const PATH_STOP_CJK: &str = "，、。；：！？（）《》「」『』【】";
 
+/// 裸 `http://` / `https://` 网址。`k://`、`ftp://` 不认。
+pub(crate) fn try_http_url(text: &str, i: usize) -> Option<(usize, String)> {
+    if i >= text.len() {
+        return None;
+    }
+    if !(text[i..].starts_with("http://") || text[i..].starts_with("https://")) {
+        return None;
+    }
+    let n = text.len();
+    let mut j = i;
+    while j < n {
+        let b = text.as_bytes()[j];
+        if b.is_ascii_whitespace() || b == b')' {
+            break;
+        }
+        j += 1;
+    }
+    while j > i {
+        let prev = text.as_bytes()[j - 1];
+        if matches!(prev, b'.' | b',' | b';' | b':') {
+            j -= 1;
+        } else {
+            break;
+        }
+    }
+    if j <= i {
+        return None;
+    }
+    Some((j, text[i..j].to_string()))
+}
+
 /// 识别正文裸文本里的文件系统路径，作为链接返回（对齐 `[]()` 的 Link span）：
 /// - 绝对盘符路径：`D:\a\b.md`、`D:/a/b.md`
 /// - UNC 路径：`\\server\share\a.md`
 /// - 相对路径：含 `\` 或 `/` 且以 1–5 位字母数字扩展名收尾（扩展名须字母开头），
 ///   避免把 `24/7.5`、`and/or` 这类普通文本误判成路径。
-fn try_fs_path(text: &str, i: usize) -> Option<(usize, String)> {
+pub(crate) fn try_fs_path(text: &str, i: usize) -> Option<(usize, String)> {
     let b = text.as_bytes();
     let n = text.len();
     // `k://` / `ftp://` 是 URI scheme，不是盘符；裸 URL 只认 http/https。

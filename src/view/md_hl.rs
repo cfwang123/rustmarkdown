@@ -1933,23 +1933,14 @@ fn color_inlines(
                 }
             }
         }
-        if b == b'h' && (text[i..].starts_with("http://") || text[i..].starts_with("https://")) {
-            let mut j = i;
-            while j < n {
-                let c = text.as_bytes()[j];
-                if c.is_ascii_whitespace() || c == b')' {
-                    break;
-                }
-                j += 1;
-            }
-            while j > i {
-                let prev = text.as_bytes()[j - 1];
-                if matches!(prev, b'.' | b',' | b';' | b':') {
-                    j -= 1;
-                } else {
-                    break;
-                }
-            }
+        if let Some((j, _)) = crate::parser::try_http_url(text, i) {
+            flush(job, buf_from, i);
+            append_link_text(job, font, &text[i..j]);
+            i = j;
+            buf_from = i;
+            continue;
+        }
+        if let Some((j, _)) = crate::parser::try_fs_path(text, i) {
             flush(job, buf_from, i);
             append_link_text(job, font, &text[i..j]);
             i = j;
@@ -1969,7 +1960,7 @@ pub enum SrcLink {
     Image { href: String, alt: String },
 }
 
-/// 源码光标处的链接（`[文字](href)`、`![alt](src)` 或 `http(s)://`）。围栏代码、行内 code 不算。
+/// 源码光标处的链接（`[文字](href)`、`![alt](src)`、裸 `http(s)://`、裸文件路径）。围栏代码、行内 code 不算。
 pub fn link_at_char(text: &str, char_idx: usize) -> Option<SrcLink> {
     if text.is_empty() {
         return None;
@@ -2030,25 +2021,18 @@ fn link_in_line(text: &str, start: usize, end: usize, byte: usize) -> Option<Src
                 continue;
             }
         }
-        if b == b'h' && (text[i..].starts_with("http://") || text[i..].starts_with("https://")) {
-            let mut j = i;
-            while j < end {
-                let c = text.as_bytes()[j];
-                if c.is_ascii_whitespace() || c == b')' {
-                    break;
-                }
-                j += 1;
-            }
-            while j > i {
-                let prev = text.as_bytes()[j - 1];
-                if matches!(prev, b'.' | b',' | b';' | b':') {
-                    j -= 1;
-                } else {
-                    break;
-                }
-            }
+        if let Some((j, href)) = crate::parser::try_http_url(text, i) {
+            let j = j.min(end);
             if byte >= i && byte < j {
-                return Some(SrcLink::Href(text[i..j].to_string()));
+                return Some(SrcLink::Href(href));
+            }
+            i = j;
+            continue;
+        }
+        if let Some((j, href)) = crate::parser::try_fs_path(text, i) {
+            let j = j.min(end);
+            if byte >= i && byte < j {
+                return Some(SrcLink::Href(href));
             }
             i = j;
             continue;
@@ -2298,6 +2282,40 @@ mod tests {
             link_at_char(s, char_of(s, md)),
             Some(SrcLink::Href("b.md".into()))
         );
+    }
+
+    #[test]
+    fn bare_url_and_path_are_links() {
+        let job = job_of("见 https://example.com/a 和 D:\\docs\\a.md 以及 2026/项目/密码.md\n");
+        let slice = |s: &egui::text::LayoutSection| job.text[s.byte_range.clone()].to_string();
+        let is_link = |s: &egui::text::LayoutSection| s.format.color == LINK;
+        assert!(job
+            .sections
+            .iter()
+            .any(|s| is_link(s) && slice(s).contains("https://example.com/a")));
+        assert!(job
+            .sections
+            .iter()
+            .any(|s| is_link(s) && slice(s).contains("D:\\docs\\a.md")));
+        assert!(job
+            .sections
+            .iter()
+            .any(|s| is_link(s) && slice(s).contains("密码.md")));
+        let s = "打开 D:\\docs\\a.md 和 https://x.com/y\n";
+        assert_eq!(
+            link_at_char(s, char_of(s, s.find("a.md").unwrap())),
+            Some(SrcLink::Href("D:\\docs\\a.md".into()))
+        );
+        assert_eq!(
+            link_at_char(s, char_of(s, s.find("https").unwrap())),
+            Some(SrcLink::Href("https://x.com/y".into()))
+        );
+        assert!(link_at_char("24/7.5 and/or\n", 0).is_none());
+        assert!(link_at_char("k://foo/bar\n", 0).is_none());
+        let fenced = "```\nD:\\docs\\a.md\n```\n";
+        assert!(link_at_char(fenced, char_of(fenced, fenced.find("a.md").unwrap())).is_none());
+        let code = "`D:\\docs\\a.md` 旁\n";
+        assert!(link_at_char(code, char_of(code, code.find("a.md").unwrap())).is_none());
     }
 
     #[test]
