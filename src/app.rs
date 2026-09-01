@@ -2746,10 +2746,6 @@ impl App {
         }
         match action {
             view::pdf::PdfAction::None => {}
-            view::pdf::PdfAction::Open(r) => {
-                let title = self.win().tabs[active].doc.display_name();
-                self.img_overlay = Some(ImgPreview::new(title, r));
-            }
             view::pdf::PdfAction::Copy(r) => self.copy_image(&r),
             view::pdf::PdfAction::CopyFile(r) => self.copy_image_file(&r),
             view::pdf::PdfAction::CopyText(t) => {

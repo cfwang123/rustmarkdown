@@ -389,10 +389,28 @@ fn visible_page_range(tops: &[f32], hs: &[f32], clip_top: f32, clip_bot: f32) ->
 
 pub enum PdfAction {
     None,
-    Open(Raster),
     Copy(Raster),
     CopyFile(Raster),
     CopyText(String),
+}
+
+/// 适宽：整页宽度铺满预览区（对齐 docview ZoomFitWidth）。
+fn fit_width_zoom(pw: f32, avail_w: f32) -> f32 {
+    let dip = pw * PDF_PT_TO_DIP;
+    (avail_w / dip.max(1.0)).clamp(crate::view::ZOOM_MIN, crate::view::ZOOM_MAX)
+}
+
+/// 双击空白/文本页：100% ⇄ 适宽，不把整页当图片弹层。
+fn toggle_page_zoom(st: &mut PdfSession, pw: f32, avail_w: f32) {
+    toggle_page_zoom_value(&mut st.zoom, pw, avail_w);
+}
+
+fn toggle_page_zoom_value(zoom: &mut f32, pw: f32, avail_w: f32) {
+    if (*zoom - 1.0).abs() < 0.05 {
+        *zoom = fit_width_zoom(pw, avail_w);
+    } else {
+        *zoom = 1.0;
+    }
 }
 
 pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction {
@@ -548,15 +566,19 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                                     resp.clone().on_hover_cursor(CursorIcon::PointingHand);
                                 }
                                 resp.clone().on_hover_text(crate::i18n::t().pdf_drag_hint);
-                                if resp.dragged_by(PointerButton::Primary)
-                                    || (primary_down && resp.contains_pointer())
+                                let dbl = resp.double_clicked();
+                                if !dbl
+                                    && (resp.dragged_by(PointerButton::Primary)
+                                        || (primary_down && resp.contains_pointer()))
                                 {
                                     if let Some(pos) = pointer {
                                         handle_drag(st, i, page_rect, pw, ph, pos, primary_pressed);
                                     }
                                 }
-                                if resp.double_clicked() {
-                                    action = PdfAction::Open(raster.clone());
+                                if dbl {
+                                    st.clear_sel();
+                                    toggle_page_zoom(st, pw, avail_w);
+                                    st.jump_to(i);
                                 }
                                 let has_text = st.sel_page >= 0 && st.sel_lo >= 0;
                                 let rast = raster.clone();
@@ -898,6 +920,20 @@ fn recount_sel(st: &mut PdfSession) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fit_width_then_actual_size() {
+        let pw = 612.0;
+        let avail = 400.0;
+        let fit = fit_width_zoom(pw, avail);
+        assert!((fit - avail / (pw * PDF_PT_TO_DIP)).abs() < 1e-4);
+        assert!(fit < 1.0);
+        let mut z = 1.0f32;
+        toggle_page_zoom_value(&mut z, pw, avail);
+        assert!((z - fit).abs() < 1e-4);
+        toggle_page_zoom_value(&mut z, pw, avail);
+        assert!((z - 1.0).abs() < 1e-4);
+    }
 
     #[test]
     fn skip_rerender_when_width_close() {

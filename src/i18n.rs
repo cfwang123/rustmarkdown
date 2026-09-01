@@ -176,7 +176,7 @@ tr_def! {
     original_size: "原始大小", "Actual size";
     opening_pdf: "正在打开 PDF…", "Opening PDF…";
     opening_image: "正在打开图片…", "Opening image…";
-    pdf_drag_hint: "拖选文字 · 双击预览 · 右键复制", "Drag to select · double-click preview · right-click copy";
+    pdf_drag_hint: "拖选文字 · 双击放大 · 右键复制", "Drag to select · double-click zoom · right-click copy";
     readonly: "只读", "read-only";
     ok: "确定", "OK";
     cancel: "取消", "Cancel";
