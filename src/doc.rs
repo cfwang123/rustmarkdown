@@ -151,6 +151,7 @@ pub struct Tab {
     /// Word 抽出的图片目录（Markdown 相对路径以此为根）。
     pub asset_dir: Option<PathBuf>,
     pub pdf: Option<crate::view::pdf::PdfSession>,
+    pub word: Option<crate::view::word::WordSession>,
     pub image: Option<crate::view::img_view::ImageSession>,
     /// 大纲/锚点跳转到该源行（0-based）；跳转后保留若干帧以便布局完成。
     pub pending_jump: Option<usize>,
@@ -200,6 +201,7 @@ impl Tab {
             reparse_at: None,
             asset_dir: None,
             pdf: None,
+            word: None,
             image: None,
             pending_jump: None,
             jump_frames: 0,
@@ -313,6 +315,14 @@ impl Tab {
     }
 
     pub fn request_jump(&mut self, line0: usize) {
+        if self.kind == DocKind::Word {
+            if let Some(w) = self.word.as_mut() {
+                w.jump_to_block(line0);
+            }
+            self.pending_jump = Some(line0);
+            self.jump_frames = 3;
+            return;
+        }
         self.pending_jump = Some(line0);
         self.pending_editor_line = Some(line0);
         self.pending_preview_line = Some(line0);
@@ -338,7 +348,11 @@ impl Tab {
             }
             DocKind::Word => {
                 if line > 0 {
-                    self.preview.request_word_page(line);
+                    if let Some(w) = self.word.as_mut() {
+                        w.jump_to_page(line);
+                    } else {
+                        self.preview.request_word_page(line);
+                    }
                 }
             }
             DocKind::Image => {}

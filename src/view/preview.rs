@@ -4,7 +4,7 @@ use std::path::Path;
 
 use egui::{
     pos2, text_selection::LabelSelectionState, vec2, Align, Align2, Color32, Frame, Label, Layout,
-    Margin, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Ui, UiBuilder, Vec2,
+    Margin, Rect, RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2,
 };
 
 use crate::io::imgcache::{ImgCache, Raster};
@@ -107,11 +107,6 @@ const LIST_INDENT_STEP: f32 = 25.0;
 const CODE_FOLD_LINES: usize = 10;
 const HEAD_FOLD_W: f32 = 16.0;
 const SEL_BG: Color32 = Color32::from_rgb(0xBF, 0xDB, 0xFE);
-const WORD_BG: Color32 = Color32::from_rgb(0xE5, 0xE7, 0xEB);
-const WORD_PAGE_GAP: f32 = 12.0;
-const WORD_PAGE_W: f32 = 11906.0 * 96.0 / 1440.0;
-const WORD_PAGE_H: f32 = 16838.0 * 96.0 / 1440.0;
-const WORD_MARGIN: f32 = 96.0;
 
 #[derive(Clone, Copy)]
 pub struct PreviewOpts {
@@ -315,203 +310,6 @@ pub fn show(
     st.offset_y = sa.state.offset.y;
     let pane = ui.max_rect();
     st.hovered = ui.rect_contains_pointer(pane);
-}
-
-/// Word 分页预览（对齐 docview DocxViewer：A4 白页竖排，页间距 12）。
-pub fn show_paged(
-    ui: &mut Ui,
-    doc: &MdDoc,
-    st: &mut PreviewState,
-    img: &mut ImgCache,
-    mermaid: &mut MermaidCache,
-    base: Option<&Path>,
-    events: &mut Vec<PreviewEvent>,
-    opts: PreviewOpts,
-    jump_line: Option<usize>,
-) {
-    let mut ui = crate::view::pane_ui(ui);
-    let pane_clip = ui.clip_rect();
-    ui.set_clip_rect(pane_clip);
-    ui.painter().rect_filled(ui.max_rect(), 0.0, WORD_BG);
-    arm_preview_copy_fix(&ui);
-    if ui.input(|i| i.pointer.primary_pressed()) {
-        st.pick_lines = None;
-        st.pick_anchor = None;
-        ui.ctx()
-            .data_mut(|d| d.remove::<PreviewLinePick>(egui::Id::new("preview_line_pick")));
-    }
-    if crate::view::ctrl_zoom(&mut ui, &mut st.word_zoom) {
-        ui.ctx().request_repaint();
-    }
-    let max_h = ui.available_height();
-    let avail_w = ui.available_width();
-    let scale = st
-        .word_zoom
-        .clamp(crate::view::ZOOM_MIN, crate::view::ZOOM_MAX);
-    let page_w = WORD_PAGE_W * scale;
-    let page_h = WORD_PAGE_H * scale;
-    let margin = (WORD_MARGIN * scale).clamp(28.0, 96.0);
-    let inner_w = (page_w - margin * 2.0).max(80.0);
-    let inner_h = (page_h - margin * 2.0).max(80.0);
-
-    let (dirty_lo, dirty_hi, wrap_changed) = sync_preview_incr(st, &doc.blocks, inner_w);
-    let pages = pack_word_pages(&doc.blocks, &st.block_heights, inner_h, &st.collapsed_heads);
-    st.word_pages = pages.len().max(1);
-    let nav = crate::view::consume_key_nav(&mut ui);
-    match nav {
-        crate::view::KeyNav::Page(dir) => {
-            let last = st.word_pages.saturating_sub(1);
-            let next = (st.word_page as i32 + dir).clamp(0, last as i32) as usize;
-            if next != st.word_page {
-                st.pending_word_page = Some(next);
-            }
-        }
-        _ => {}
-    }
-    let page_jump = st.pending_word_page.take();
-    let sa = crate::view::content_scroll(false)
-        .id_salt("word_page_scroll")
-        .max_height(max_h)
-        .show(&mut ui, |ui| {
-            crate::view::wheel_while_dragging(ui);
-            if let crate::view::KeyNav::Line(d) = nav {
-                ui.scroll_with_delta(d);
-            }
-            st.viewport_top = ui.clip_rect().top();
-            ui.set_min_width((page_w + 32.0).max(avail_w));
-            ui.add_space(10.0);
-            let clip = ui.clip_rect();
-            let mut ol: HashMap<u32, i32> = HashMap::new();
-            let mut head_num = HeadingNumber::default();
-            let mut jump_rect = None;
-            for (pi, &(a, b)) in pages.iter().enumerate() {
-                let top = ui.cursor().top();
-                if top <= clip.top() + 24.0 {
-                    st.word_page = pi;
-                }
-                let row_w = page_w.max(avail_w);
-                let (row_rect, _) = ui.allocate_exact_size(vec2(row_w, page_h), Sense::hover());
-                let page_rect = Rect::from_center_size(row_rect.center(), vec2(page_w, page_h));
-                ui.scope_builder(
-                    UiBuilder::new().id_salt(("word_page", pi)).max_rect(page_rect),
-                    |ui| {
-                    ui.set_clip_rect(page_rect.intersect(pane_clip));
-                    ui.set_min_size(vec2(page_w, page_h));
-                    ui.set_max_size(vec2(page_w, page_h));
-                    Frame::new()
-                        .fill(Color32::WHITE)
-                        .stroke(Stroke::new(1.0, c(0xD1, 0xD5, 0xDB)))
-                        .inner_margin(Margin::ZERO)
-                        .show(ui, |ui| {
-                            ui.set_min_size(vec2(page_w, page_h));
-                            ui.set_max_size(vec2(page_w, page_h));
-                            ui.set_max_width(page_w);
-                            ui.set_clip_rect(
-                                ui.max_rect().intersect(pane_clip).intersect(page_rect),
-                            );
-                            Frame::new()
-                                .inner_margin(Margin::symmetric(margin as i8, margin as i8))
-                                .show(ui, |ui| {
-                                    ui.set_min_width(inner_w);
-                                    ui.set_max_width(inner_w);
-                                    ui.spacing_mut().item_spacing.y = 0.0;
-                                    if a < b {
-                                        render_blocks(
-                                            ui,
-                                            &doc.blocks[a..b],
-                                            st,
-                                            img,
-                                            mermaid,
-                                            base,
-                                            events,
-                                            inner_w,
-                                            true,
-                                            opts,
-                                            None,
-                                            a,
-                                            &mut ol,
-                                            &mut head_num,
-                                            dirty_lo,
-                                            dirty_hi,
-                                            !wrap_changed,
-                                        );
-                                    }
-                                });
-                        });
-                });
-                if page_jump == Some(pi) {
-                    jump_rect = Some(page_rect);
-                } else if jump_rect.is_none() {
-                    if let Some(line) = jump_line {
-                        for (k, blk) in doc.blocks.iter().enumerate().take(b).skip(a) {
-                            if blk.line0 <= line && line <= blk.line1 {
-                                jump_rect = Some(page_rect);
-                                let _ = k;
-                                break;
-                            }
-                        }
-                    }
-                }
-                ui.add_space(WORD_PAGE_GAP);
-            }
-            if let Some(r) = jump_rect {
-                ui.scroll_to_rect(r, Some(Align::TOP));
-            }
-            if doc.blocks.is_empty() {
-                ui.add_space(24.0);
-                ui.label(RichText::new(crate::i18n::t().empty_doc).color(c(0x4B, 0x55, 0x63)));
-            }
-        });
-    st.offset_y = sa.state.offset.y;
-    st.top_line = 0;
-    for (i, b) in doc.blocks.iter().enumerate() {
-        if i < st.block_tops.len() && st.block_tops[i] <= st.viewport_top + 12.0 {
-            st.top_line = b.line0;
-        }
-    }
-    st.hovered = ui.rect_contains_pointer(ui.max_rect());
-}
-
-fn pack_word_pages(
-    blocks: &[MdBlock],
-    heights: &[f32],
-    inner_h: f32,
-    collapsed: &HashSet<usize>,
-) -> Vec<(usize, usize)> {
-    let n = blocks.len();
-    if n == 0 {
-        return Vec::new();
-    }
-    let limit = inner_h.max(40.0);
-    let mut pages = Vec::new();
-    let mut start = 0usize;
-    let mut used = 0.0;
-    let mut i = 0usize;
-    while i < n {
-        let collapsed_head = blocks[i].kind == MdBlockKind::Heading
-            && heading_has_body(blocks, i)
-            && collapsed.contains(&blocks[i].line0);
-        let take_end = if collapsed_head {
-            skip_heading_section(blocks, i)
-        } else {
-            i + 1
-        };
-        let h = heights.get(i).copied().unwrap_or(28.0).max(4.0);
-        if i > start && used + h > limit {
-            pages.push((start, i));
-            start = i;
-            used = 0.0;
-        }
-        used += h;
-        i = take_end;
-    }
-    if start < n {
-        pages.push((start, n));
-    }
-    if pages.is_empty() {
-        pages.push((0, n));
-    }
-    pages
 }
 
 fn blank_takes_space(_blocks: &[MdBlock], _i: usize) -> bool {
@@ -2568,14 +2366,5 @@ mod tests {
         assert_eq!(wrap_pieces("斜体"), vec!["斜体"]);
         assert_eq!(wrap_pieces("更新后bug处理"), vec!["更新后", "bug", "处理"]);
     }
-
-    #[test]
-    fn pack_word_pages_splits() {
-        let doc = parser::parse("# A\n\npara1\n\n## B\n\npara2\n");
-        let heights = vec![40.0; doc.blocks.len()];
-        let pages = pack_word_pages(&doc.blocks, &heights, 50.0, &HashSet::new());
-        assert!(pages.len() >= 2);
-        assert_eq!(pages[0].0, 0);
-        assert_eq!(pages.last().unwrap().1, doc.blocks.len());
-    }
 }
+

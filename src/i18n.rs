@@ -464,6 +464,7 @@ pub fn word_format(ext: &str) -> String {
 pub fn word_open(e: impl std::fmt::Display) -> String {
     r1(t().word_open, e)
 }
+#[allow(dead_code)]
 pub fn word_cache(e: impl std::fmt::Display) -> String {
     r1(t().word_cache, e)
 }

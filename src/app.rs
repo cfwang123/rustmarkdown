@@ -683,17 +683,18 @@ impl App {
                 }
             }
             DocKind::Word => {
-                let (text, asset) = crate::io::word::load(&path)?;
+                let wdoc = crate::io::word::load(&path)?;
                 if let Some(tab) = self.wins.get_mut(win_i).and_then(|w| w.tabs.get_mut(tab_i)) {
                     tab.doc = DocSession::from_file(
                         path.clone(),
-                        text,
+                        wdoc.plain.clone(),
                         crate::doc::Newline::Lf,
                         file::TextEnc::utf8(false),
                     );
                     tab.kind = DocKind::Word;
-                    tab.asset_dir = Some(asset);
-                    tab.reparse(tab_size);
+                    tab.word = Some(view::word::WordSession::new(wdoc));
+                    tab.asset_dir = None;
+                    tab.md = crate::parser::parse_with_tab("", tab_size);
                     tab.reset_text_undo();
                     tab.deferred = None;
                     tab.apply_saved_view(mode, line);
@@ -826,12 +827,12 @@ impl App {
                 )
             }
             DocKind::Word => {
-                let (text, asset) = crate::io::word::load(&path)?;
+                let wdoc = crate::io::word::load(&path)?;
                 let mut tab = Tab::new(
                     id,
                     DocSession::from_file(
                         path.clone(),
-                        text,
+                        wdoc.plain.clone(),
                         crate::doc::Newline::Lf,
                         file::TextEnc::utf8(false),
                     ),
@@ -839,7 +840,8 @@ impl App {
                     tab_size,
                 );
                 tab.kind = DocKind::Word;
-                tab.asset_dir = Some(asset);
+                tab.word = Some(view::word::WordSession::new(wdoc));
+                tab.md = crate::parser::parse_with_tab("", tab_size);
                 tab
             }
             DocKind::Pdf => {
@@ -1373,6 +1375,11 @@ impl App {
             self.status = t().word_readonly_save.to_string();
             return false;
         }
+        let word_md = if tab.kind == DocKind::Word {
+            tab.word.as_ref().map(|w| w.doc.md_export.clone())
+        } else {
+            None
+        };
         let need_dialog = save_as || tab.doc.path.is_none() || tab.kind != DocKind::Markdown;
         let path = if need_dialog {
             let mut dlg = rfd::FileDialog::new().add_filter("Markdown", &["md"]);
@@ -1397,6 +1404,9 @@ impl App {
         let Some(tab) = win.active_tab_mut() else {
             return true;
         };
+        if let Some(md) = word_md {
+            tab.doc.text = md;
+        }
         let write_res = match tab.doc.vim.clone() {
             Some(sec) => file::write_vimcrypt(&path, &tab.doc.text, tab.doc.newline, &tab.doc.enc, &sec),
             None => file::write_text(&path, &tab.doc.text, tab.doc.newline, &tab.doc.enc),
@@ -2495,11 +2505,20 @@ impl App {
                     view::outline::collect_pages(
                         tab.pdf.as_ref().map(|p| p.page_count as usize).unwrap_or(0),
                     )
+                } else if tab.kind == DocKind::Word {
+                    view::outline::collect_word(
+                        tab.word
+                            .as_ref()
+                            .map(|w| w.doc.toc.as_slice())
+                            .unwrap_or(&[]),
+                    )
                 } else {
                     view::outline::collect(&tab.md, auto_num)
                 };
                 let current = if tab.kind == DocKind::Pdf {
                     tab.pdf.as_ref().map(|p| p.current_page()).unwrap_or(0)
+                } else if tab.kind == DocKind::Word {
+                    tab.word.as_ref().map(|w| w.top_block).unwrap_or(0)
                 } else if tab.mode == ViewMode::Code {
                     tab.editor_top_line
                 } else {
@@ -2568,6 +2587,10 @@ impl App {
         ui.push_id(id, |ui| {
             if self.win().tabs[active].kind == DocKind::Pdf {
                 self.show_pdf_pane(ui, active);
+                return;
+            }
+            if self.win().tabs[active].kind == DocKind::Word {
+                self.show_word_pane(ui, active);
                 return;
             }
             if self.win().tabs[active].kind == DocKind::Image {
@@ -2737,6 +2760,45 @@ impl App {
         }
     }
 
+    fn show_word_pane(&mut self, ui: &mut egui::Ui, active: usize) {
+        let jump = self.win().tabs[active]
+            .pending_preview_line
+            .or(self.win().tabs[active].pending_jump);
+        let find_q = {
+            let tab = &self.win().tabs[active];
+            if tab.find.open {
+                tab.find.query.clone()
+            } else {
+                String::new()
+            }
+        };
+        let action = if let Some(word) = self.win_mut().tabs[active].word.as_mut() {
+            view::word::show(ui, word, jump, &find_q)
+        } else {
+            view::word::WordAction::None
+        };
+        if let Some(word) = self.win().tabs[active].word.as_ref() {
+            let page = word.current_page();
+            let pages = word.pages;
+            let zoom = word.zoom;
+            let top = word.top_block;
+            let tab = &mut self.win_mut().tabs[active];
+            tab.preview.word_page = page;
+            tab.preview.word_pages = pages;
+            tab.preview.word_zoom = zoom;
+            tab.preview.top_line = top;
+        }
+        match action {
+            view::word::WordAction::None => {}
+            view::word::WordAction::OpenImage { raster, title } => {
+                self.img_overlay = Some(ImgPreview::new(title, raster));
+            }
+            view::word::WordAction::CopyImage(r) => self.copy_image(&r),
+            view::word::WordAction::CopyAsFile(r) => self.copy_image_file(&r),
+            view::word::WordAction::OpenHref(h) => self.open_href(&h),
+        }
+    }
+
     fn show_image_pane(&mut self, ui: &mut egui::Ui, active: usize) {
         let action = if let Some(img) = self.win_mut().tabs[active].image.as_mut() {
             view::img_view::show(ui, img)
@@ -2819,11 +2881,7 @@ impl App {
         {
             let cur = self.cur;
             let tab = &mut self.wins[cur].tabs[active];
-            let path = tab
-                .asset_dir
-                .as_ref()
-                .map(|d| d.join("doc.md"))
-                .or_else(|| tab.doc.path.clone());
+            let path = tab.doc.path.clone();
             let jump = tab.pending_preview_line.or(tab.pending_jump);
             if caret_line.is_some() && tab.sel_chars > 0 {
                 if !ui.input(|i| i.pointer.primary_down()) {
@@ -2841,32 +2899,18 @@ impl App {
                 tab.preview.hint_line1 = None;
                 tab.preview.hint_text.clear();
             }
-            if tab.kind == DocKind::Word {
-                view::preview::show_paged(
-                    ui,
-                    &tab.md,
-                    &mut tab.preview,
-                    &mut self.imgcache,
-                    &mut self.mermaid,
-                    path.as_deref(),
-                    &mut events,
-                    opts,
-                    jump,
-                );
-            } else {
-                view::preview::show(
-                    ui,
-                    &tab.md,
-                    &mut tab.preview,
-                    &mut self.imgcache,
-                    &mut self.mermaid,
-                    path.as_deref(),
-                    &mut events,
-                    opts,
-                    jump,
-                    caret_line,
-                );
-            }
+            view::preview::show(
+                ui,
+                &tab.md,
+                &mut tab.preview,
+                &mut self.imgcache,
+                &mut self.mermaid,
+                path.as_deref(),
+                &mut events,
+                opts,
+                jump,
+                caret_line,
+            );
         }
         self.handle_preview_events(events);
     }
@@ -3791,13 +3835,13 @@ impl App {
                 self.status = i18n::reloaded(&file_label(&path));
             }
             Some(DocKind::Word) => match crate::io::word::load(&path) {
-                Ok((text, asset)) => {
-                    let ts = self.settings.md_tab_size;
+                Ok(wdoc) => {
                     let tab = &mut self.wins[wi].tabs[ti];
-                    tab.doc.text = text;
-                    tab.asset_dir = Some(asset);
+                    tab.doc.text = wdoc.plain.clone();
+                    tab.word = Some(view::word::WordSession::new(wdoc));
+                    tab.asset_dir = None;
+                    tab.md = crate::parser::parse_with_tab("", self.settings.md_tab_size);
                     tab.reset_text_undo();
-                    tab.reparse(ts);
                     self.status = i18n::reloaded(&file_label(&path));
                 }
                 Err(e) => self.status = e,

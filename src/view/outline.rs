@@ -7,6 +7,7 @@ use egui::{
     Sense, TextFormat, Ui, Vec2,
 };
 
+use crate::io::word::WordToc;
 use crate::parser::{HeadingNumber, MdBlock, MdBlockKind, MdDoc};
 
 /// 扁平标题项（含父下标，便于折叠时只高亮可见路径）。
@@ -31,6 +32,20 @@ pub fn collect(doc: &MdDoc, auto_number: bool) -> Vec<TocEntry> {
         None
     };
     walk(&doc.blocks, &mut out, &mut num);
+    attach_parents(&mut out);
+    out
+}
+
+pub fn collect_word(toc: &[WordToc]) -> Vec<TocEntry> {
+    let mut out: Vec<TocEntry> = toc
+        .iter()
+        .map(|t| TocEntry {
+            title: t.title.clone(),
+            level: t.level.clamp(1, 6),
+            line0: t.block_idx,
+            parent: None,
+        })
+        .collect();
     attach_parents(&mut out);
     out
 }

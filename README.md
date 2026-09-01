@@ -51,7 +51,7 @@ Implemented:
 - Preview table right / center align: text is aligned, glyph order matches source (no RTL, so “斜体” does not become “体斜”)
 - Title bar shows the version (e.g. `demo.md — rustmarkdown v1.0.1`)
 - Back / forward (toolbar, View menu, Alt+← / Alt+→): outline clicks, `#anchors`, and in-doc relative Markdown links (cap 50)
-- **DOC / DOCX read-only** (aligned with docview): convert to Markdown and paginate as A4 portrait (gray canvas, white pages, 12 px gap); Ctrl+wheel / Ctrl++- / Ctrl+0 zoom (1.0 = A4 100%); PgUp/PgDn page, arrows scroll; outline jump; original file is not edited; Save As can export `.md`
+- **DOC / DOCX read-only** (aligned with docview DocxViewer): parse with `office_oxide` into a formatted layout and paginate directly (not via Markdown); gray canvas, white pages, 12 px gap; keeps headings / font size / bold / color / alignment / numbering / tables / images; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; PgUp/PgDn page, arrows scroll; outline jump; original file is not edited; Save As can export `.md`
 - **PDF read-only** (aligned with docview continuous pages): pdfium raster per page, stacked vertically; layout is O(visible) via page-top binary search (1000-page scrollbar drag does not walk every page); while dragging the thumb, no prefetch/text extract, and the worker drops pages already scrolled away; keep old bitmap while zooming; drop far textures; open at 100%; Ctrl+wheel / Ctrl++- / Ctrl+0 zoom; PgUp/PgDn page, arrows scroll; text select is Sumatra-style yellow highlight; Ctrl+C / right-click copy selected text; outline is a page list; double-click zoom, right-click copy image
 - **Image file read-only** (aligned with docview ImageViewer): png / jpg / jpeg / gif / bmp / ico / tif / tiff / webp; open contain-fit to the window; wheel zoom (cursor-centered), pan; double-click toggles fit ⇄ 100%; `[` / `]` rotate 90°; Ctrl+C / right-click copy image or as file; Save As png/jpg/bmp; does not overwrite the original
 - Vim-encrypted Markdown: zip (`VimCrypt~01!`), blowfish (`02!`) and blowfish2 (`03!`); password prompt on open; save writes back with the original method. xchacha20 is not supported. Password stays in memory only.
@@ -124,8 +124,8 @@ src/
   workspace.rs folder workspace tree
   doc.rs       document session / tab / mode (Markdown / Word / PDF / image)
   parser/      Markdown parse, table widths, heading numbers
-  view/        editor, preview, PDF pages (text select), image preview, find bar, outline, MD source highlight, fence highlight, toolbar icons, fonts
-  io/          files and encoding, file watch, Word→MD, PDF/pdfium raster and text, image cache, Mermaid, .lnk, settings
+  view/        editor, preview, Word pages, PDF pages (text select), image preview, find bar, outline, MD source highlight, fence highlight, toolbar icons, fonts
+  io/          files and encoding, file watch, Word layout IR, PDF/pdfium raster and text, image cache, Mermaid, .lnk, settings
 assets/        app icons icon.png / icon.ico
 native/pdfium  pdfium.dll (copied next to the exe at build; not committed)
 pack.js        Release build and pack to release/rustmarkdown_x.x.x.7z
