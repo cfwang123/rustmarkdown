@@ -3215,8 +3215,7 @@ impl App {
     }
 
     fn show_dialogs(&mut self, ctx: &egui::Context) {
-        let esc = self.dialog.is_some()
-            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+        let esc = self.dialog.is_some() && take_escape(ctx);
         match &self.dialog {
             None => {}
             Some(Dialog::Reload { win, tab }) => {
@@ -3345,14 +3344,16 @@ impl App {
                                 .password(true)
                                 .desired_width(280.0),
                         );
+                        // 密码框不要 IME，否则 Esc 会被输入法吃掉。
+                        ui.ctx().output_mut(|o| o.ime = None);
                         if resp.lost_focus()
                             && ui.input(|i| i.key_pressed(egui::Key::Enter))
                             && !self.vim_pw.is_empty()
                         {
                             submit = true;
                         }
-                        // 每帧 request_focus 会把回车造成的失焦抢回去，只在尚未聚焦时要一次。
-                        if !resp.has_focus() && !resp.lost_focus() {
+                        // Esc 会让输入框失焦；不要下一帧再抢焦点，否则窗口关不掉。
+                        if !esc && !resp.has_focus() && !resp.lost_focus() {
                             resp.request_focus();
                         }
                         ui.add_space(8.0);
@@ -3719,6 +3720,28 @@ impl App {
         let tab = self.win().active_tab().map(|t| t.title());
         ctx.send_viewport_cmd(ViewportCommand::Title(viewport_title(tab.as_deref())));
     }
+}
+
+/// 对话框 Esc：用 key_pressed / keys_down（不要求修饰键匹配），并吃掉按键以免后面快捷键再处理。
+fn take_escape(ctx: &egui::Context) -> bool {
+    let hit = ctx.input(|i| i.key_pressed(Key::Escape) || i.keys_down.contains(&Key::Escape));
+    if !hit {
+        return false;
+    }
+    ctx.input_mut(|i| {
+        i.events.retain(|e| {
+            !matches!(
+                e,
+                egui::Event::Key {
+                    key: Key::Escape,
+                    ..
+                }
+            )
+        });
+        i.keys_down.remove(&Key::Escape);
+    });
+    ctx.request_repaint();
+    true
 }
 
 fn viewport_pointer_screen(ctx: &egui::Context) -> Option<egui::Pos2> {
