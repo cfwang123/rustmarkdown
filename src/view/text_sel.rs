@@ -6,16 +6,19 @@ use egui::text::{CCursor, CCursorRange};
 use egui::text_selection::LabelSelectionState;
 use egui::{Color32, Event, Galley, Id, PointerButton, Pos2, Response, Stroke, Ui};
 
-/// 双击扩选停在这些字符之前（不含）：空白、引号、括号、反引号、逗号、中文标点。
-/// `: / \` 不算分隔符，路径和 URL 会整段选中。
+/// 双击扩选停在中英文标点之前（不含）。空格、Tab 算进词里；换行仍分隔。
+/// `: / \` 与 `.` 不算分隔符，路径和 URL 会整段选中。
 pub fn is_sel_break(c: char) -> bool {
-    if c.is_whitespace() {
+    if c == '\n' || c == '\r' {
         return true;
     }
     matches!(
         c,
-        '\'' | '"' | '(' | ')' | '`' | ',' | '，' | '。' | '、' | '‘' | '“' | '’' | '”' | '（'
-            | '）' | '？'
+        // 英文标点（不含 . : / \）
+        '\'' | '"' | '(' | ')' | '[' | ']' | '{' | '}' | '`' | ',' | ';' | '!' | '?'
+        // 中文标点
+            | '，' | '。' | '、' | '；' | '！' | '？' | '：' | '‘' | '“' | '’' | '”' | '（' | '）'
+            | '【' | '】' | '《' | '》' | '「' | '」' | '『' | '』'
     )
 }
 
@@ -422,10 +425,19 @@ mod tests {
     }
 
     #[test]
-    fn token_whitespace() {
-        assert_eq!(expand_token("ab cd", 1), (0, 2));
-        assert_eq!(expand_token("ab cd", 2), (2, 3));
-        assert_eq!(expand_token("ab\tcd", 0), (0, 2));
+    fn token_space_joins_until_punct() {
+        // 空格不算分隔；扩到中英文标点为止。`/` 也不算分隔。
+        assert_eq!(expand_token("ab cd", 1), (0, 5));
+        assert_eq!(expand_token("ab cd", 2), (0, 5));
+        assert_eq!(expand_token("ab\tcd", 0), (0, 5));
+        let s = "Markdown 预览 / 编辑器，用 Rust";
+        let i = s.chars().take_while(|c| *c != '预').count();
+        assert_eq!(expand_token(s, i), (0, "Markdown 预览 / 编辑器".chars().count()));
+        let j = s.chars().take_while(|c| *c != '用').count();
+        assert_eq!(
+            expand_token(s, j),
+            (j, s.chars().count())
+        );
     }
 
     #[test]
@@ -492,7 +504,7 @@ mod tests {
         assert_eq!((a.index, b.index), (2, 7));
         let r = range_at("ab cd", 2, false);
         let [a, b] = r.sorted_cursors();
-        assert_eq!(a.index, b.index);
+        assert_eq!((a.index, b.index), (0, 5));
     }
 
     #[test]
