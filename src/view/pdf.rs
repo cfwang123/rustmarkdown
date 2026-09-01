@@ -4,8 +4,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use egui::{
-    Align, Color32, ColorImage, Context, CursorIcon, Frame, Layout, Margin, PointerButton, Pos2,
-    Rect, RichText, Sense, Stroke, TextureOptions, Ui, Vec2,
+    pos2, Align, Color32, ColorImage, Context, CursorIcon, Frame, Layout, Margin, PointerButton,
+    Pos2, Rect, RichText, Sense, Stroke, TextureOptions, Ui, UiBuilder, Vec2,
 };
 
 use crate::io::pdf::{PdfChar, PdfEngine, PdfEvent};
@@ -71,6 +71,13 @@ pub struct PdfSession {
     pub top_page: usize,
     pub err: Option<String>,
     page_tops: Vec<f32>,
+    page_hs: Vec<f32>,
+    content_h: f32,
+    content_w: f32,
+    layout_zoom: f32,
+    layout_avail_w: f32,
+    last_scroll_y: f32,
+    bar_dragging: bool,
     pending_page: Option<usize>,
     sel_page: i32,
     sel_lo: i32,
@@ -94,6 +101,13 @@ impl PdfSession {
             top_page: 0,
             err: None,
             page_tops: Vec::new(),
+            page_hs: Vec::new(),
+            content_h: 1.0,
+            content_w: 120.0,
+            layout_zoom: -1.0,
+            layout_avail_w: -1.0,
+            last_scroll_y: 0.0,
+            bar_dragging: false,
             pending_page: None,
             sel_page: -1,
             sel_lo: -1,
@@ -151,6 +165,8 @@ impl PdfSession {
                     self.chars = vec![None; self.page_count as usize];
                     self.text_pending = vec![false; self.page_count as usize];
                     self.page_tops = vec![0.0; self.page_count as usize];
+                    self.page_hs = vec![0.0; self.page_count as usize];
+                    self.layout_zoom = -1.0;
                 }
                 PdfEvent::PageFailed(page) => {
                     let i = page as usize;
@@ -213,7 +229,14 @@ impl PdfSession {
         }
     }
 
-    fn request_visible(&mut self, vis_lo: usize, vis_hi: usize, ppp: f32) {
+    fn request_visible(
+        &mut self,
+        vis_lo: usize,
+        vis_hi: usize,
+        ppp: f32,
+        prefetch: i32,
+        want_text: bool,
+    ) {
         let Some(eng) = self.engine.as_ref() else {
             return;
         };
@@ -221,8 +244,9 @@ impl PdfSession {
             return;
         }
         let n = self.page_count as i32;
-        let lo = (vis_lo as i32 - PREFETCH).max(0) as usize;
-        let hi = ((vis_hi as i32) + PREFETCH).min(n - 1) as usize;
+        let lo = (vis_lo as i32 - prefetch).max(0) as usize;
+        let hi = ((vis_hi as i32) + prefetch).min(n - 1) as usize;
+        eng.set_vis(lo as u32, hi as u32);
         for i in lo..=hi {
             let (pw, _) = self.sizes.get(i).copied().unwrap_or((612.0, 792.0));
             let width = page_render_width(pw, ppp, self.zoom);
@@ -241,7 +265,7 @@ impl PdfSession {
                 }
                 eng.request(i as u32, width);
             }
-            if self.chars[i].is_none() && !self.text_pending[i] {
+            if want_text && self.chars[i].is_none() && !self.text_pending[i] {
                 self.text_pending[i] = true;
                 eng.request_text(i as u32);
             }
@@ -260,11 +284,71 @@ impl PdfSession {
             if ii >= lo && ii <= hi {
                 continue;
             }
-            if matches!(&self.slots[i], Slot::Ready { pending: None, .. }) {
+            if !matches!(&self.slots[i], Slot::Failed) {
                 self.slots[i] = Slot::Empty;
             }
         }
     }
+
+    fn ensure_layout(&mut self, avail_w: f32) {
+        let n = self.page_count as usize;
+        if n == 0 {
+            return;
+        }
+        if self.page_hs.len() == n
+            && (self.layout_zoom - self.zoom).abs() < 1e-4
+            && (self.layout_avail_w - avail_w).abs() < 0.5
+        {
+            return;
+        }
+        self.page_tops.resize(n, 0.0);
+        self.page_hs.resize(n, 0.0);
+        let mut y = 0.0f32;
+        let mut max_w = 120.0f32;
+        for i in 0..n {
+            let (pw, ph) = self.sizes.get(i).copied().unwrap_or((612.0, 792.0));
+            let disp = page_disp_size(pw, ph, self.zoom);
+            self.page_tops[i] = y;
+            self.page_hs[i] = disp.y;
+            max_w = max_w.max(disp.x);
+            y += disp.y + PAGE_GAP;
+        }
+        self.content_h = y.max(1.0);
+        self.content_w = (max_w + 32.0).max(avail_w);
+        self.layout_zoom = self.zoom;
+        self.layout_avail_w = avail_w;
+    }
+}
+
+/// 按页顶/高二分可见区间（Sumatra DisplayModel：不扫全部页）。
+fn visible_page_range(tops: &[f32], hs: &[f32], clip_top: f32, clip_bot: f32) -> (usize, usize) {
+    let n = tops.len();
+    if n == 0 || n != hs.len() {
+        return (0, 0);
+    }
+    let mut lo = 0usize;
+    let mut hi = n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if tops[mid] + hs[mid] < clip_top - 8.0 {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let vis_lo = lo.min(n - 1);
+    let mut lo = 0usize;
+    let mut hi = n;
+    while lo < hi {
+        let mid = (lo + hi) / 2;
+        if tops[mid] <= clip_bot + 8.0 {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    let vis_hi = lo.saturating_sub(1).min(n - 1).max(vis_lo);
+    (vis_lo, vis_hi)
 }
 
 pub enum PdfAction {
@@ -320,6 +404,7 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
     let primary_pressed = ui.input(|i| i.pointer.primary_pressed());
     let primary_down = ui.input(|i| i.pointer.primary_down());
     let primary_released = ui.input(|i| i.pointer.primary_released());
+    st.ensure_layout(avail_w);
 
     let sa = crate::view::content_scroll(false)
         .id_salt("pdf_scroll")
@@ -330,46 +415,47 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                 ui.scroll_with_delta(d);
             }
             let clip = ui.clip_rect();
-            ui.add_space(10.0);
-            let mut vis_lo = 0usize;
-            let mut vis_hi = 0usize;
-            let n = st.page_count as usize;
+            let content_w = st.content_w.max(avail_w);
+            ui.set_min_width(content_w);
+            let origin = ui.cursor().min;
+            ui.allocate_exact_size(Vec2::new(content_w, st.content_h), Sense::hover());
+            if let Some(p) = jump_page {
+                if p < st.page_tops.len() {
+                    let top = origin.y + st.page_tops[p];
+                    let h = st.page_hs.get(p).copied().unwrap_or(1.0);
+                    ui.scroll_to_rect(
+                        Rect::from_min_size(pos2(origin.x, top), Vec2::new(content_w, h)),
+                        Some(Align::TOP),
+                    );
+                }
+            }
+            let (vis_lo, vis_hi) = visible_page_range(
+                &st.page_tops,
+                &st.page_hs,
+                clip.top() - origin.y,
+                clip.bottom() - origin.y,
+            );
+            let mut top_page = vis_lo;
+            for i in vis_lo..=vis_hi {
+                if origin.y + st.page_tops[i] <= clip.top() + 24.0 {
+                    top_page = i;
+                }
+            }
+            st.top_page = top_page;
             let mut hover_text = false;
-            let max_disp_w = (0..n)
-                .map(|i| {
-                    let (pw, _) = st.sizes.get(i).copied().unwrap_or((612.0, 792.0));
-                    page_disp_size(pw, 1.0, st.zoom).x
-                })
-                .fold(120.0_f32, f32::max);
-            ui.set_min_width((max_disp_w + 32.0).max(avail_w));
-            for i in 0..n {
+            let n = st.page_count as usize;
+            for i in vis_lo..=vis_hi {
+                if i >= n {
+                    break;
+                }
                 let (pw, ph) = st.sizes.get(i).copied().unwrap_or((612.0, 792.0));
                 let disp = page_disp_size(pw, ph, st.zoom);
-                let top = ui.cursor().top();
-                if i < st.page_tops.len() {
-                    st.page_tops[i] = top;
-                }
+                let top = origin.y + st.page_tops[i];
                 let row_w = disp.x.max(avail_w);
-                let x = ui.max_rect().left() + ((row_w - disp.x) * 0.5).max(0.0);
-                let rect = Rect::from_min_size(egui::pos2(x, top), disp);
-                if jump_page == Some(i) {
-                    ui.scroll_to_rect(rect, Some(Align::TOP));
-                }
-                let on_screen =
-                    rect.bottom() >= clip.top() - 8.0 && rect.top() <= clip.bottom() + 8.0;
-                if on_screen {
-                    if vis_lo == 0 && i > 0 {
-                        vis_lo = i;
-                    }
-                    vis_hi = i;
-                    if rect.top() <= clip.top() + 24.0 {
-                        st.top_page = i;
-                    }
-                }
-                if !on_screen {
-                    ui.add_space(disp.y + PAGE_GAP);
-                    continue;
-                }
+                let row_rect = Rect::from_min_size(pos2(origin.x, top), Vec2::new(row_w, disp.y));
+                ui.scope_builder(
+                    UiBuilder::new().id_salt(("pdf-row", i)).max_rect(row_rect),
+                    |ui| {
                 ui.allocate_ui_with_layout(
                     Vec2::new(row_w, disp.y),
                     Layout::left_to_right(Align::Min),
@@ -465,7 +551,8 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                     });
                     },
                 );
-                ui.add_space(PAGE_GAP);
+                    },
+                );
             }
             if hover_text {
                 ui.ctx().set_cursor_icon(CursorIcon::Text);
@@ -489,7 +576,15 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
 
     let (vis_lo, vis_hi) = sa.inner;
     let vis_hi = vis_hi.max(vis_lo);
-    st.request_visible(vis_lo, vis_hi, ppp);
+    let offset_y = sa.state.offset.y;
+    if primary_released {
+        st.bar_dragging = false;
+    } else if primary_down && (offset_y - st.last_scroll_y).abs() > 1.0 {
+        st.bar_dragging = true;
+    }
+    st.last_scroll_y = offset_y;
+    let prefetch = if st.bar_dragging { 0 } else { PREFETCH };
+    st.request_visible(vis_lo, vis_hi, ppp, prefetch, !st.bar_dragging);
     st.drop_far_pages(vis_lo, vis_hi);
     let busy = (vis_lo..=vis_hi).any(|i| match st.slots.get(i) {
         Some(Slot::Empty | Slot::Loading { .. }) => true,
@@ -768,5 +863,32 @@ mod tests {
         assert_eq!(w, 816);
         let hi = page_render_width(612.0, 4.0, 8.0);
         assert_eq!(hi, 2400);
+    }
+
+    #[test]
+    fn visible_range_matches_scan_on_1000_pages() {
+        let n = 1000usize;
+        let mut tops = vec![0.0f32; n];
+        let hs = vec![100.0f32; n];
+        for i in 0..n {
+            tops[i] = i as f32 * 112.0;
+        }
+        let clip_top = 50_000.0;
+        let clip_bot = 51_200.0;
+        let (lo, hi) = visible_page_range(&tops, &hs, clip_top, clip_bot);
+        let mut brute_lo = None;
+        let mut brute_hi = 0usize;
+        for i in 0..n {
+            let t = tops[i];
+            let b = t + hs[i];
+            if b >= clip_top - 8.0 && t <= clip_bot + 8.0 {
+                if brute_lo.is_none() {
+                    brute_lo = Some(i);
+                }
+                brute_hi = i;
+            }
+        }
+        assert_eq!((lo, hi), (brute_lo.unwrap(), brute_hi));
+        assert!(hi - lo < 20, "可见页应很少, {lo}..{hi}");
     }
 }

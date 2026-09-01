@@ -52,7 +52,7 @@ Windows 优先的 Markdown 预览 / 编辑器，用 Rust + egui 原生绘制，*
 - 窗口标题栏显示版本号（如 `demo.md — rustmarkdown v1.0.1`）
 - 后退 / 前进（工具栏、查看菜单、Alt+← / Alt+→）：大纲点击、`#锚点`、文内相对 Markdown 链接记入历史（上限 50）
 - **DOC / DOCX 只读预览**（对齐 docview）：转为 Markdown 后按 A4 竖向分页（灰底白页、页间距 12）；Ctrl+滚轮 / Ctrl++- / Ctrl+0 缩放（1.0 = A4 100%）；PgUp/PgDn 翻页、方向键滚动；大纲可跳转；不可改原文件，可用「另存为」导出 `.md`
-- **PDF 只读预览**（对齐 docview 连续页）：pdfium 按页光栅化，竖向一页接一页；只排可见页（对照 SumatraPDF：缩放时拉伸旧图、远页丢纹理、过时渲染丢掉）；打开默认 100%；Ctrl+滚轮 / Ctrl++- / Ctrl+0 缩放；PgUp/PgDn 翻页、方向键滚动；拖选文字为 Sumatra 式黄底高亮，Ctrl+C / 右键复制所选文字；大纲为页列表；双击放大、右键复制图片
+- **PDF 只读预览**（对齐 docview 连续页）：pdfium 按页光栅化，竖向一页接一页；按页顶二分只排可见页（千页拖滚动条不再扫全部页）；拖条时不预取、不抽字，worker 丢掉已滚走的页；缩放拉伸旧图、远页丢纹理；打开默认 100%；Ctrl+滚轮 / Ctrl++- / Ctrl+0 缩放；PgUp/PgDn 翻页、方向键滚动；拖选文字为 Sumatra 式黄底高亮，Ctrl+C / 右键复制所选文字；大纲为页列表；双击放大、右键复制图片
 - **图片文件只读预览**（对齐 docview ImageViewer）：打开 png / jpg / jpeg / gif / bmp / ico / tif / tiff / webp；打开时按窗口居中适应（contain）；滚轮缩放（光标为中心）、拖拽平移；双击适合窗口 ⇄ 100%；`[` / `]` 旋转 90°；Ctrl+C / 右键复制图片或复制为文件；另存为 png/jpg/bmp；不可覆盖原文件
 - Vim 加密 Markdown：zip（`VimCrypt~01!`）、blowfish（`02!`）、blowfish2（`03!`）；打开弹密码；保存按原加密方式写回。不支持 xchacha20。密码只在内存中。
 - `node pack.js` 一键编译并打包到 `release/rustmarkdown_x.x.x.7z`
