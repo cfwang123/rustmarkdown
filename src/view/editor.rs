@@ -145,26 +145,33 @@ pub fn show(
                 }
             }
             let clip = te.text_clip_rect.intersect(ui.clip_rect());
-            let sel_bg = if steal >= 2 {
-                if let Some(pos) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.hover_pos())) {
+            let mut pin = None;
+            if steal >= 2 {
+                if let Some(pos) = ui.input(|i| {
+                    i.pointer
+                        .interact_pos()
+                        .or(i.pointer.hover_pos())
+                        .or(i.pointer.latest_pos())
+                }) {
                     let idx = te.galley.cursor_from_pos(pos - te.galley_pos).index;
-                    let range = crate::view::text_sel::range_at(text, idx, steal >= 3);
-                    te.state.cursor.set_char_range(Some(range));
-                    te.state.clone().store(ui.ctx(), te.response.id);
-                    te.cursor_range = Some(range);
-                    ui.memory_mut(|m| m.request_focus(te.response.id));
-                    crate::view::text_sel::set_sticky(ui, range);
-                    crate::view::md_hl::note_native_sel(Some(range));
-                    crate::view::md_hl::selection_bgs(
-                        te.galley.as_ref(),
-                        te.galley_pos,
-                        clip,
-                        range,
-                    )
-                } else {
-                    crate::view::md_hl::note_native_sel(te.cursor_range);
-                    Shape::Noop
+                    pin = Some(crate::view::text_sel::range_at(text, idx, steal >= 3));
                 }
+            } else {
+                pin = crate::view::text_sel::sticky_range(ui);
+            }
+            let sel_bg = if let Some(range) = pin {
+                te.state.cursor.set_char_range(Some(range));
+                te.state.clone().store(ui.ctx(), te.response.id);
+                te.cursor_range = Some(range);
+                ui.memory_mut(|m| m.request_focus(te.response.id));
+                crate::view::text_sel::set_sticky(ui, range);
+                crate::view::md_hl::note_native_sel(Some(range));
+                crate::view::md_hl::selection_bgs(
+                    te.galley.as_ref(),
+                    te.galley_pos,
+                    clip,
+                    range,
+                )
             } else if let Some(range) = stashed_sel {
                 let native = te.cursor_range.filter(|r| !r.is_empty());
                 if native.is_none() {
@@ -651,5 +658,55 @@ mod tests {
         assert!(!undo_split_tick(&mut st, 0, true, true, 0.1));
         assert!(!st.uncommitted);
         assert!(!undo_split_tick(&mut st, 2, false, false, 0.2));
+    }
+
+    #[test]
+    fn double_click_keeps_selection_next_frame() {
+        let ctx = egui::Context::default();
+        crate::view::theme::install_fonts(&ctx);
+        let mut text = "abcdefghij\nnext\n".to_string();
+        let mut undoer = egui::util::undoer::Undoer::default();
+        let click = egui::pos2(40.0, 24.0);
+        let mut t = 0.0_f64;
+        let mut run = |mut events: Vec<egui::Event>| -> usize {
+            events.insert(0, egui::Event::PointerMoved(click));
+            let mut raw = egui::RawInput::default();
+            raw.screen_rect = Some(egui::Rect::from_min_size(
+                egui::pos2(0.0, 0.0),
+                egui::vec2(900.0, 600.0),
+            ));
+            raw.events = events;
+            raw.modifiers = egui::Modifiers::NONE;
+            raw.focused = true;
+            raw.time = Some(t);
+            t += 0.08;
+            let mut sel = 0usize;
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    sel = super::show(ui, &mut text, None, None, &[], None, &mut undoer).sel_chars;
+                });
+            });
+            sel
+        };
+        let _ = run(vec![]);
+        let btn = |pressed: bool| egui::Event::PointerButton {
+            pos: click,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let s1 = run(vec![btn(true)]);
+        let s2 = run(vec![btn(false)]);
+        let s3 = run(vec![btn(true)]);
+        let sel_dbl = run(vec![btn(false)]);
+        let sel_hold = run(vec![]);
+        assert!(
+            sel_dbl >= 5,
+            "双击应选中词，sels press1={s1} rel1={s2} press2={s3} dbl={sel_dbl} hold={sel_hold}"
+        );
+        assert!(
+            sel_hold >= 5,
+            "双击选区下一帧消失: dbl={sel_dbl} hold={sel_hold}"
+        );
     }
 }

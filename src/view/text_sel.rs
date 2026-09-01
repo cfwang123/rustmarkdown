@@ -92,27 +92,84 @@ pub fn range_at(text: &str, char_idx: usize, triple: bool) -> CCursorRange {
     CCursorRange::two(CCursor::new(a), CCursor::new(b))
 }
 
-/// 指针在 `area` 或当前 clip 内的双击=2、三击=3，否则 0。
-/// 长文滚动后内容区 max_rect 只在顶部，必须同时看 clip。
+#[derive(Clone, Copy)]
+pub struct ClickSeq {
+    pub t: f64,
+    pub x: f32,
+    pub y: f32,
+    pub n: u8,
+}
+
+impl Default for ClickSeq {
+    fn default() -> Self {
+        Self {
+            t: f64::NEG_INFINITY,
+            x: 0.0,
+            y: 0.0,
+            n: 0,
+        }
+    }
+}
+
+/// 自己数单击/双击/三击。松开且在区域内才返回 1/2/3，否则 0。
+pub fn tick_click_seq(
+    st: &mut ClickSeq,
+    now: f64,
+    x: f32,
+    y: f32,
+    released: bool,
+    over: bool,
+) -> u8 {
+    if !released || !over {
+        return 0;
+    }
+    let dist = (st.x - x).hypot(st.y - y);
+    if now - st.t < 0.45 && dist < 10.0 {
+        st.n = st.n.saturating_add(1).min(3);
+    } else {
+        st.n = 1;
+    }
+    st.t = now;
+    st.x = x;
+    st.y = y;
+    st.n
+}
+
+/// 指针在 `area` 或 clip 内松开时的连击次数（自己计数，并与 egui 取较大值）。
 pub fn multi_click_over(ui: &Ui, area: egui::Rect) -> u8 {
     let clip = ui.clip_rect();
-    ui.input(|i| {
-        let over = i
+    let (now, pos, released, egui_n) = ui.input(|i| {
+        let pos = i
             .pointer
             .interact_pos()
             .or(i.pointer.hover_pos())
-            .is_some_and(|p| area.contains(p) || clip.contains(p));
-        if !over {
-            return 0;
-        }
-        if i.pointer.button_triple_clicked(PointerButton::Primary) {
+            .or(i.pointer.latest_pos());
+        let released = i.pointer.primary_released();
+        let egui_n = if i.pointer.button_triple_clicked(PointerButton::Primary) {
             3
         } else if i.pointer.button_double_clicked(PointerButton::Primary) {
             2
         } else {
             0
-        }
-    })
+        };
+        (i.time, pos, released, egui_n)
+    });
+    let over = pos.is_some_and(|p| area.contains(p) || clip.contains(p));
+    let id = Id::new("editor_click_seq");
+    let mut st = ui
+        .ctx()
+        .data(|d| d.get_temp::<ClickSeq>(id))
+        .unwrap_or_default();
+    let ours = match pos {
+        Some(p) => tick_click_seq(&mut st, now, p.x, p.y, released, over),
+        None => 0,
+    };
+    ui.ctx().data_mut(|d| d.insert_temp(id, st));
+    if released && over {
+        ours.max(egui_n)
+    } else {
+        0
+    }
 }
 
 const STICKY_ID: &str = "editor_sticky_sel";
@@ -131,20 +188,38 @@ pub fn clear_sticky(ui: &Ui) {
         .data_mut(|d| d.remove::<CCursorRange>(Id::new(STICKY_ID)));
 }
 
-/// 新的按下 / 打字 / 方向键应丢掉双击粘住的选区。
+/// 新的按下或改字才丢掉双击粘住的选区（不要见任何 Key 就清）。
 pub fn should_clear_sticky(ui: &Ui) -> bool {
     ui.input(|i| {
         i.pointer.primary_pressed()
             || i.events.iter().any(|e| {
                 matches!(
                     e,
-                    Event::Key { pressed: true, .. } | Event::Text(_) | Event::Paste(_) | Event::Cut
+                    Event::Text(_)
+                        | Event::Paste(_)
+                        | Event::Cut
+                        | Event::Key {
+                            pressed: true,
+                            key: egui::Key::Backspace
+                                | egui::Key::Delete
+                                | egui::Key::Enter
+                                | egui::Key::Tab
+                                | egui::Key::ArrowLeft
+                                | egui::Key::ArrowRight
+                                | egui::Key::ArrowUp
+                                | egui::Key::ArrowDown
+                                | egui::Key::Home
+                                | egui::Key::End
+                                | egui::Key::PageUp
+                                | egui::Key::PageDown,
+                            ..
+                        }
                 )
             })
     })
 }
 
-/// 预览 Label 选区。
+/// 预览 Label 选区。双击帧不走 egui 分词（空 galley 上会 usize 下溢崩 Debug）。
 pub fn paint_selectable_galley(
     ui: &Ui,
     response: &Response,
@@ -153,6 +228,15 @@ pub fn paint_selectable_galley(
     color: Color32,
     underline: Stroke,
 ) {
+    let multi = ui.input(|i| {
+        i.pointer.button_double_clicked(PointerButton::Primary)
+            || i.pointer.button_triple_clicked(PointerButton::Primary)
+    });
+    if multi {
+        ui.painter().galley(galley_pos, galley, color);
+        let _ = underline;
+        return;
+    }
     LabelSelectionState::label_text_selection(ui, response, galley_pos, galley, color, underline);
 }
 
@@ -239,5 +323,16 @@ mod tests {
         let r = range_at("a-b\nc", 1, true);
         let [a, b] = r.sorted_cursors();
         assert_eq!((a.index, b.index), (0, 3));
+    }
+
+    #[test]
+    fn click_seq_counts_double_and_triple() {
+        let mut st = ClickSeq::default();
+        assert_eq!(tick_click_seq(&mut st, 1.0, 10.0, 10.0, true, true), 1);
+        assert_eq!(tick_click_seq(&mut st, 1.2, 11.0, 10.0, true, true), 2);
+        assert_eq!(tick_click_seq(&mut st, 1.35, 12.0, 10.0, true, true), 3);
+        assert_eq!(tick_click_seq(&mut st, 2.5, 12.0, 10.0, true, true), 1);
+        assert_eq!(tick_click_seq(&mut st, 2.6, 12.0, 10.0, true, false), 0);
+        assert_eq!(tick_click_seq(&mut st, 2.6, 12.0, 10.0, false, true), 0);
     }
 }

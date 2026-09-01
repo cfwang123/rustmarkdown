@@ -605,20 +605,26 @@ fn sel_gap_size(ui: &mut Ui, w: f32, h: f32) {
     let h = h.max(1.0);
     let w = w.max(1.0);
     let (rect, response) = ui.allocate_exact_size(vec2(w, h), select_sense());
-    // 空 galley：可起选，但复制时不会塞进空格。
-    let galley = ui.painter().layout_no_wrap(
-        String::new(),
-        egui::FontId::proportional(1.0),
-        Color32::TRANSPARENT,
-    );
-    LabelSelectionState::label_text_selection(
-        ui,
-        &response,
-        rect.left_top(),
-        galley,
-        Color32::TRANSPARENT,
-        Stroke::NONE,
-    );
+    let multi = ui.input(|i| {
+        i.pointer.button_double_clicked(egui::PointerButton::Primary)
+            || i.pointer.button_triple_clicked(egui::PointerButton::Primary)
+    });
+    if !multi {
+        // 空 galley：可起选，但复制时不会塞进空格。双击帧不要交给 egui 分词（会崩）。
+        let galley = ui.painter().layout_no_wrap(
+            String::new(),
+            egui::FontId::proportional(1.0),
+            Color32::TRANSPARENT,
+        );
+        LabelSelectionState::label_text_selection(
+            ui,
+            &response,
+            rect.left_top(),
+            galley,
+            Color32::TRANSPARENT,
+            Stroke::NONE,
+        );
+    }
     span_group_note(ui, &response);
     // 单击空白不留选区；按住拖过才选中中间正文。
     if response.clicked() && !response.double_clicked() && !response.triple_clicked() {
@@ -1975,37 +1981,42 @@ struct PreviewLinePick {
 fn span_group_begin(ui: &Ui, id: egui::Id) {
     let bg = ui.painter().add(Shape::Noop);
     ui.ctx().data_mut(|d| {
-        d.insert_temp(
-            egui::Id::new("preview_span_acc"),
-            SpanGroupAcc {
-                id,
-                bg,
-                rects: Vec::new(),
-                dbl: false,
-            },
-        );
+        let key = egui::Id::new("preview_span_stack");
+        let mut stack = d.get_temp::<Vec<SpanGroupAcc>>(key).unwrap_or_default();
+        stack.push(SpanGroupAcc {
+            id,
+            bg,
+            rects: Vec::new(),
+            dbl: false,
+        });
+        d.insert_temp(key, stack);
     });
 }
 
 fn span_group_note(ui: &Ui, resp: &egui::Response) {
     ui.ctx().data_mut(|d| {
-        let key = egui::Id::new("preview_span_acc");
-        if let Some(mut acc) = d.get_temp::<SpanGroupAcc>(key) {
-            acc.rects.push(resp.rect);
-            if resp.double_clicked() || resp.triple_clicked() {
-                acc.dbl = true;
+        let key = egui::Id::new("preview_span_stack");
+        if let Some(mut stack) = d.get_temp::<Vec<SpanGroupAcc>>(key) {
+            if let Some(acc) = stack.last_mut() {
+                acc.rects.push(resp.rect);
+                if resp.double_clicked() || resp.triple_clicked() {
+                    acc.dbl = true;
+                }
             }
-            d.insert_temp(key, acc);
+            d.insert_temp(key, stack);
         }
     });
 }
 
 fn span_group_end(ui: &Ui, text: &str) {
     let acc = ui.ctx().data_mut(|d| {
-        let key = egui::Id::new("preview_span_acc");
-        let v = d.get_temp::<SpanGroupAcc>(key);
-        if v.is_some() {
-            d.remove::<SpanGroupAcc>(key);
+        let key = egui::Id::new("preview_span_stack");
+        let mut stack = d.get_temp::<Vec<SpanGroupAcc>>(key).unwrap_or_default();
+        let v = stack.pop();
+        if stack.is_empty() {
+            d.remove::<Vec<SpanGroupAcc>>(key);
+        } else {
+            d.insert_temp(key, stack);
         }
         v
     });
@@ -2356,6 +2367,50 @@ mod tests {
         assert_eq!(squeeze_cjk_spaces("中文 English 汉字"), "中文English汉字");
         assert_eq!(squeeze_cjk_spaces("访问 https://x.com 即可"), "访问https://x.com即可");
         assert_eq!(squeeze_cjk_spaces("hello world"), "hello world");
+    }
+
+    #[test]
+    fn preview_double_click_does_not_panic() {
+        let ctx = egui::Context::default();
+        crate::view::theme::install_fonts(&ctx);
+        let doc = parser::parse(
+            "- E2025242扬子嘉盛：4台电脑安装常用软件、系统更新、驱动更新（90%）。\n",
+        );
+        let mut st = PreviewState::default();
+        let mut img = crate::io::imgcache::ImgCache::default();
+        let mut mermaid = crate::io::mermaid::MermaidCache::default();
+        let opts = PreviewOpts::default();
+        let click = pos2(220.0, 100.0);
+        let mut t = 0.0_f64;
+        let mut step = |events: Vec<egui::Event>| {
+            let mut raw = egui::RawInput::default();
+            raw.screen_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 700.0)));
+            raw.events = events;
+            raw.focused = true;
+            raw.time = Some(t);
+            t += 0.08;
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let mut ev = Vec::new();
+                    show(
+                        ui, &doc, &mut st, &mut img, &mut mermaid, None, &mut ev, opts, None,
+                        None,
+                    );
+                });
+            });
+        };
+        step(vec![egui::Event::PointerMoved(click)]);
+        let btn = |pressed: bool| egui::Event::PointerButton {
+            pos: click,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        step(vec![btn(true)]);
+        step(vec![btn(false)]);
+        step(vec![btn(true)]);
+        step(vec![btn(false)]);
+        step(vec![]);
     }
 
     #[test]
