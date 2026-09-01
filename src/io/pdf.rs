@@ -87,37 +87,89 @@ fn worker(path: std::path::PathBuf, cmd_rx: Receiver<PdfCmd>, ev_tx: Sender<PdfE
         page_count: doc.page_count,
         sizes: doc.sizes.clone(),
     }));
-    while let Ok(cmd) = cmd_rx.recv() {
-        match cmd {
-            PdfCmd::Quit => break,
-            PdfCmd::Render { page, width } => {
-                if page >= doc.page_count {
-                    continue;
-                }
-                match doc.render_page(page, width) {
-                    Ok((px_w, px_h, rgba)) => {
-                        let _ = ev_tx.send(PdfEvent::Page(PdfPagePixels {
-                            page,
-                            width,
-                            px_w,
-                            px_h,
-                            rgba,
-                        }));
-                    }
-                    Err(_) => {
-                        let _ = ev_tx.send(PdfEvent::PageFailed(page));
+    loop {
+        let first = match cmd_rx.recv() {
+            Ok(c) => c,
+            Err(_) => break,
+        };
+        let mut batch = vec![first];
+        while let Ok(c) = cmd_rx.try_recv() {
+            batch.push(c);
+        }
+        if batch.iter().any(|c| matches!(c, PdfCmd::Quit)) {
+            break;
+        }
+        let mut renders: Vec<(u32, u32)> = Vec::new();
+        let mut texts: Vec<u32> = Vec::new();
+        for c in batch {
+            match c {
+                PdfCmd::Quit => {}
+                PdfCmd::Render { page, width } => renders.push((page, width)),
+                PdfCmd::ExtractText { page } => {
+                    if !texts.contains(&page) {
+                        texts.push(page);
                     }
                 }
             }
-            PdfCmd::ExtractText { page } => {
-                if page >= doc.page_count {
-                    continue;
-                }
-                let chars = doc.extract_chars(page);
-                let _ = ev_tx.send(PdfEvent::Text { page, chars });
+        }
+        // 后进先出：最新可见页优先，同页只留最后一次 width。
+        for (page, width) in merge_latest_renders(renders) {
+            if page >= doc.page_count {
+                continue;
             }
+            let t0 = std::time::Instant::now();
+            match doc.render_page(page, width) {
+                Ok((px_w, px_h, rgba)) => {
+                    if crate::io::log::enabled() {
+                        let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                        crate::io::log::write(&format!(
+                            "pdf.render p{} {width}px {px_w}x{px_h} {ms:.0}ms",
+                            page + 1
+                        ));
+                    }
+                    let _ = ev_tx.send(PdfEvent::Page(PdfPagePixels {
+                        page,
+                        width,
+                        px_w,
+                        px_h,
+                        rgba,
+                    }));
+                }
+                Err(_) => {
+                    let _ = ev_tx.send(PdfEvent::PageFailed(page));
+                }
+            }
+        }
+        for page in texts {
+            if page >= doc.page_count {
+                continue;
+            }
+            let chars = doc.extract_chars(page);
+            let _ = ev_tx.send(PdfEvent::Text { page, chars });
         }
     }
 }
 
+fn merge_latest_renders(renders: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
+    let mut seen = std::collections::HashSet::new();
+    let mut out = Vec::new();
+    for (page, width) in renders.into_iter().rev() {
+        if seen.insert(page) {
+            out.push((page, width));
+        }
+    }
+    out
+}
+
 pub use pdfium::PdfChar;
+
+#[cfg(test)]
+mod tests {
+    use super::merge_latest_renders;
+
+    #[test]
+    fn latest_width_per_page_newest_first() {
+        let v = merge_latest_renders(vec![(0, 800), (1, 800), (0, 1600), (2, 800)]);
+        assert_eq!(v, vec![(2, 800), (0, 1600), (1, 800)]);
+    }
+}

@@ -13,6 +13,8 @@ use crate::io::imgcache::Raster;
 
 const PAGE_GAP: f32 = 12.0;
 const PREFETCH: i32 = 2;
+/// 视口外超过这么多页的纹理丢掉（对齐 Sumatra FreeNotVisible）。
+const DROP_AWAY: i32 = 6;
 const BG: Color32 = Color32::from_rgb(0xE5, 0xE7, 0xEB);
 /// 100%：1 PDF 点 = 1/72 英寸，按 96 DPI 换成逻辑像素（与 Sumatra「实际大小」一致）。
 const PDF_PT_TO_DIP: f32 = 96.0 / 72.0;
@@ -32,14 +34,31 @@ const SEL: Color32 = Color32::from_rgba_premultiplied(0xC0, 0xC6, 0x0C, 0xC8);
 
 enum Slot {
     Empty,
+    /// 第一次光栅，还没有可拉伸的旧图。
     Loading {
         width: u32,
     },
     Ready {
         width: u32,
         raster: Raster,
+        pending: Option<u32>,
     },
     Failed,
+}
+
+fn width_close(a: u32, b: u32) -> bool {
+    a.abs_diff(b) <= 80
+}
+
+/// 已有图且宽度够近，或已经在渲目标宽度，就不再排队。
+fn should_request(have: Option<u32>, pending: Option<u32>, want: u32) -> bool {
+    if have.is_some_and(|w| width_close(w, want)) {
+        return false;
+    }
+    if pending.is_some_and(|w| width_close(w, want)) {
+        return false;
+    }
+    true
 }
 
 pub struct PdfSession {
@@ -136,7 +155,13 @@ impl PdfSession {
                 PdfEvent::PageFailed(page) => {
                     let i = page as usize;
                     if i < self.slots.len() {
-                        self.slots[i] = Slot::Failed;
+                        if matches!(&self.slots[i], Slot::Ready { .. }) {
+                            if let Slot::Ready { pending, .. } = &mut self.slots[i] {
+                                *pending = None;
+                            }
+                        } else {
+                            self.slots[i] = Slot::Failed;
+                        }
                     }
                 }
                 PdfEvent::Failed(e) => {
@@ -156,6 +181,11 @@ impl PdfSession {
                     if i >= self.slots.len() {
                         continue;
                     }
+                    if let Slot::Ready { width: have, .. } = &self.slots[i] {
+                        if width_close(*have, px.width) && *have >= px.width {
+                            continue;
+                        }
+                    }
                     let img = ColorImage::from_rgba_unmultiplied(
                         [px.px_w as usize, px.px_h as usize],
                         &px.rgba,
@@ -173,6 +203,7 @@ impl PdfSession {
                             rgba: Arc::new(px.rgba),
                             local_path: None,
                         },
+                        pending: None,
                     };
                 }
             }
@@ -195,19 +226,42 @@ impl PdfSession {
         for i in lo..=hi {
             let (pw, _) = self.sizes.get(i).copied().unwrap_or((612.0, 792.0));
             let width = page_render_width(pw, ppp, self.zoom);
-            let need = match &self.slots[i] {
-                Slot::Empty => true,
-                Slot::Failed => false,
-                Slot::Loading { width: w } => width.abs_diff(*w) > 80,
-                Slot::Ready { width: w, .. } => width.abs_diff(*w) > 80,
+            let (have, pending, failed) = match &self.slots[i] {
+                Slot::Failed => (None, None, true),
+                Slot::Empty => (None, None, false),
+                Slot::Loading { width: w } => (None, Some(*w), false),
+                Slot::Ready {
+                    width: w, pending, ..
+                } => (Some(*w), *pending, false),
             };
-            if need {
-                self.slots[i] = Slot::Loading { width };
+            if !failed && should_request(have, pending, width) {
+                match &mut self.slots[i] {
+                    Slot::Ready { pending, .. } => *pending = Some(width),
+                    _ => self.slots[i] = Slot::Loading { width },
+                }
                 eng.request(i as u32, width);
             }
             if self.chars[i].is_none() && !self.text_pending[i] {
                 self.text_pending[i] = true;
                 eng.request_text(i as u32);
+            }
+        }
+    }
+
+    fn drop_far_pages(&mut self, vis_lo: usize, vis_hi: usize) {
+        if self.slots.is_empty() {
+            return;
+        }
+        let n = self.slots.len() as i32;
+        let lo = (vis_lo as i32 - DROP_AWAY).max(0);
+        let hi = (vis_hi as i32 + DROP_AWAY).min(n - 1);
+        for i in 0..self.slots.len() {
+            let ii = i as i32;
+            if ii >= lo && ii <= hi {
+                continue;
+            }
+            if matches!(&self.slots[i], Slot::Ready { pending: None, .. }) {
+                self.slots[i] = Slot::Empty;
             }
         }
     }
@@ -301,7 +355,9 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                 if jump_page == Some(i) {
                     ui.scroll_to_rect(rect, Some(Align::TOP));
                 }
-                if rect.bottom() >= clip.top() - 8.0 && rect.top() <= clip.bottom() + 8.0 {
+                let on_screen =
+                    rect.bottom() >= clip.top() - 8.0 && rect.top() <= clip.bottom() + 8.0;
+                if on_screen {
                     if vis_lo == 0 && i > 0 {
                         vis_lo = i;
                     }
@@ -309,6 +365,10 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                     if rect.top() <= clip.top() + 24.0 {
                         st.top_page = i;
                     }
+                }
+                if !on_screen {
+                    ui.add_space(disp.y + PAGE_GAP);
+                    continue;
                 }
                 ui.allocate_ui_with_layout(
                     Vec2::new(row_w, disp.y),
@@ -428,12 +488,15 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
     }
 
     let (vis_lo, vis_hi) = sa.inner;
-    st.request_visible(vis_lo, vis_hi.max(vis_lo), ppp);
-    if st
-        .slots
-        .iter()
-        .any(|s| matches!(s, Slot::Loading { .. } | Slot::Empty))
-    {
+    let vis_hi = vis_hi.max(vis_lo);
+    st.request_visible(vis_lo, vis_hi, ppp);
+    st.drop_far_pages(vis_lo, vis_hi);
+    let busy = (vis_lo..=vis_hi).any(|i| match st.slots.get(i) {
+        Some(Slot::Empty | Slot::Loading { .. }) => true,
+        Some(Slot::Ready { pending: Some(_), .. }) => true,
+        _ => false,
+    });
+    if busy {
         ui.ctx().request_repaint();
     }
     action
@@ -677,4 +740,33 @@ fn recount_sel(st: &mut PdfSession) {
         .iter()
         .filter(|c| c.index >= st.sel_lo && c.index <= st.sel_hi && !c.ch.is_control())
         .count();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn skip_rerender_when_width_close() {
+        assert!(!should_request(Some(1200), None, 1240));
+        assert!(!should_request(Some(800), Some(1600), 1600));
+        assert!(should_request(None, None, 800));
+        assert!(should_request(Some(800), None, 1600));
+        assert!(!should_request(None, Some(800), 820));
+    }
+
+    #[test]
+    fn page_size_100pct_matches_96dpi() {
+        let s = page_disp_size(612.0, 792.0, 1.0);
+        assert!((s.x - 816.0).abs() < 0.5);
+        assert!((s.y - 1056.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn render_width_clamped() {
+        let w = page_render_width(612.0, 1.0, 1.0);
+        assert_eq!(w, 816);
+        let hi = page_render_width(612.0, 4.0, 8.0);
+        assert_eq!(hi, 2400);
+    }
 }

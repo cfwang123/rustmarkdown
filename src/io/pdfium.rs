@@ -8,7 +8,6 @@ use std::sync::OnceLock;
 use libloading::{Library, Symbol};
 
 const FPDF_ANNOT: c_int = 0x01;
-const FPDF_LCD_TEXT: c_int = 0x02;
 
 #[derive(Clone)]
 pub struct PdfChar {
@@ -169,6 +168,7 @@ impl Doc {
                 return Err(crate::i18n::t().pdf_bitmap.into());
             }
             (api.bmp_fill)(bmp, 0, 0, w as c_int, h as c_int, 0xFFFFFFFF);
+            // 不对文字做 LCD 亚像素（Sumatra 预览也不强制），整页光栅明显更快。
             (api.render)(
                 bmp,
                 pg,
@@ -177,27 +177,15 @@ impl Doc {
                 w as c_int,
                 h as c_int,
                 0,
-                FPDF_ANNOT | FPDF_LCD_TEXT,
+                FPDF_ANNOT,
             );
             let buf = (api.bmp_buf)(bmp);
             let stride = (api.bmp_stride)(bmp);
-            let mut rgba = vec![0u8; (w * h * 4) as usize];
-            if !buf.is_null() && stride >= (w as c_int) * 4 {
-                for y in 0..h as usize {
-                    let src = buf.add(y * stride as usize);
-                    for x in 0..w as usize {
-                        let i = (y * w as usize + x) * 4;
-                        let b = *src.add(x * 4);
-                        let g = *src.add(x * 4 + 1);
-                        let r = *src.add(x * 4 + 2);
-                        let a = *src.add(x * 4 + 3);
-                        rgba[i] = r;
-                        rgba[i + 1] = g;
-                        rgba[i + 2] = b;
-                        rgba[i + 3] = a;
-                    }
-                }
-            }
+            let rgba = if !buf.is_null() && stride >= (w as c_int) * 4 {
+                bgra_to_rgba(buf, stride, w, h)
+            } else {
+                vec![0u8; (w * h * 4) as usize]
+            };
             (api.bmp_destroy)(bmp);
             (api.close_page)(pg);
             Ok((w, h, rgba))
@@ -273,6 +261,25 @@ impl Drop for Doc {
     }
 }
 
+/// pdfium `FPDFBitmap_Create(..., alpha=1)` 为 BGRA。按 u32 交换 R/B。
+pub fn bgra_to_rgba(src: *const u8, stride: i32, w: u32, h: u32) -> Vec<u8> {
+    let w = w as usize;
+    let h = h as usize;
+    let mut out = vec![0u8; w * h * 4];
+    unsafe {
+        for y in 0..h {
+            let row = src.add(y * stride as usize) as *const u32;
+            let dst = out.as_mut_ptr().add(y * w * 4) as *mut u32;
+            for x in 0..w {
+                let p = *row.add(x);
+                *dst.add(x) =
+                    (p & 0xFF00_FF00) | ((p & 0xFF) << 16) | ((p >> 16) & 0xFF);
+            }
+        }
+    }
+    out
+}
+
 pub fn read_pdf_bytes(path: &Path) -> Result<Vec<u8>, String> {
     std::fs::read(path).map_err(|e| crate::i18n::pdf_read(path.display(), e))
 }
@@ -282,5 +289,19 @@ mod tests {
     #[test]
     fn find_or_warn() {
         let _ = super::find_dll();
+    }
+
+    #[test]
+    fn bgra_to_rgba_swaps_channels() {
+        let src = [1u8, 2, 3, 4, 5, 6, 7, 8];
+        let out = super::bgra_to_rgba(src.as_ptr(), 8, 2, 1);
+        assert_eq!(out, vec![3, 2, 1, 4, 7, 6, 5, 8]);
+    }
+
+    #[test]
+    fn bgra_to_rgba_respects_stride() {
+        let src = [1u8, 2, 3, 4, 9, 9, 9, 9, 5, 6, 7, 8, 9, 9, 9, 9];
+        let out = super::bgra_to_rgba(src.as_ptr(), 8, 1, 2);
+        assert_eq!(out, vec![3, 2, 1, 4, 7, 6, 5, 8]);
     }
 }
