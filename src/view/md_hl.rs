@@ -625,18 +625,62 @@ pub(crate) fn restore_sel(ui: &egui::Ui, id: egui::Id, range: CCursorRange) {
     }
 }
 
+/// 大选区静止时叠画：几何和颜色对齐 egui `paint_text_selection`（整行铺满、换行多半格、不透明选区色）。
 pub(crate) fn selection_bgs(
     galley: &egui::Galley,
     galley_pos: egui::Pos2,
     clip: Rect,
     range: CCursorRange,
+    col: Color32,
 ) -> Shape {
     let [min, max] = range.sorted_cursors();
     if min.index >= max.index {
         return Shape::Noop;
     }
-    let col = Color32::from_rgba_unmultiplied(0x37, 0x80, 0xCE, 90);
-    paint_char_bgs(galley, galley_pos, clip, &[(min.index, max.index, col)])
+    let min = galley.layout_from_cursor(min);
+    let max = galley.layout_from_cursor(max);
+    if min.row > max.row {
+        return Shape::Noop;
+    }
+    let mut shapes: Vec<Shape> = Vec::new();
+    for ri in min.row..=max.row {
+        let row = &galley.rows[ri];
+        let r = row.rect().translate(galley_pos.to_vec2());
+        if r.bottom() < clip.top() - 2.0 || r.top() > clip.bottom() + 2.0 {
+            continue;
+        }
+        let left = if ri == min.row {
+            row.x_offset(min.column)
+        } else {
+            0.0
+        };
+        let right = if ri == max.row {
+            row.x_offset(max.column)
+        } else {
+            let nub = if row.ends_with_newline {
+                row.height() / 2.0
+            } else {
+                0.0
+            };
+            row.size.x + nub
+        };
+        if right - left < 0.5 {
+            continue;
+        }
+        let rect = Rect::from_min_max(
+            pos2(r.left() + left, r.top()),
+            pos2(r.left() + right, r.bottom()),
+        )
+        .intersect(clip);
+        if rect.width() > 0.5 && rect.height() > 0.5 {
+            shapes.push(Shape::rect_filled(rect, 0.0, col));
+        }
+    }
+    match shapes.len() {
+        0 => Shape::Noop,
+        1 => shapes.remove(0),
+        _ => Shape::Vec(shapes),
+    }
 }
 
 pub(crate) fn last_hollow_log() -> String {
@@ -2580,6 +2624,65 @@ mod tests {
         assert!(should_collapse_sel(5000, false));
         assert!(!should_collapse_sel(10, false));
         assert!(!should_collapse_sel(5000, true));
+    }
+
+    fn shape_rects(s: &Shape, out: &mut Vec<(Rect, Color32)>) {
+        match s {
+            Shape::Rect(r) => out.push((r.rect, r.fill)),
+            Shape::Vec(v) => {
+                for x in v {
+                    shape_rects(x, out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn idle_sel_overlay_matches_native_geometry() {
+        let ctx = egui::Context::default();
+        crate::view::theme::install_fonts(&ctx);
+        let text = "abcdefghi\nABCDEFGHI\n";
+        let mut raw = egui::RawInput::default();
+        raw.screen_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(800.0, 400.0)));
+        let col = Color32::from_rgb(144, 209, 255);
+        let mut rects = Vec::new();
+        let mut row0_w = 0.0f32;
+        let mut row1_w = 0.0f32;
+        let _ = ctx.run(raw, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                let galley = ui.fonts_mut(|f| f.layout_job(job_of(text)));
+                assert!(galley.rows.len() >= 2);
+                row0_w = galley.rows[0].size.x;
+                row1_w = galley.rows[1].size.x;
+                let n = text.chars().count();
+                let range = CCursorRange::two(CCursor::new(0), CCursor::new(n.saturating_sub(1)));
+                let shape = selection_bgs(
+                    &galley,
+                    pos2(0.0, 0.0),
+                    Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(2000.0, 2000.0)),
+                    range,
+                    col,
+                );
+                shape_rects(&shape, &mut rects);
+            });
+        });
+        assert!(
+            rects.len() >= 2,
+            "应画出两行选区, got={}",
+            rects.len()
+        );
+        assert!(rects.iter().all(|(_, c)| *c == col), "叠画须用原生选区色");
+        let w0 = rects[0].0.width();
+        let w1 = rects[1].0.width();
+        assert!(
+            w0 > row0_w + 2.0,
+            "整行选区应带换行标记半格, overlay={w0} row={row0_w}"
+        );
+        assert!(
+            (w1 - row1_w).abs() < 8.0 || w1 < w0,
+            "末行不到换行则不应多半格, overlay={w1} row={row1_w}"
+        );
     }
 
     #[test]

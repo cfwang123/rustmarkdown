@@ -171,6 +171,7 @@ pub fn show(
                     te.galley_pos,
                     clip,
                     range,
+                    ui.visuals().selection.bg_fill,
                 )
             } else if let Some(range) = stashed_sel {
                 let native = te.cursor_range.filter(|r| !r.is_empty());
@@ -182,6 +183,7 @@ pub fn show(
                         te.galley_pos,
                         clip,
                         range,
+                        ui.visuals().selection.bg_fill,
                     )
                 } else {
                     crate::view::md_hl::note_native_sel(te.cursor_range);
