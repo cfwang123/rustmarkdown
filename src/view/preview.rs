@@ -425,7 +425,8 @@ fn sel_gap_size(ui: &mut Ui, w: f32, h: f32) {
             Stroke::NONE,
         );
     }
-    span_group_note(ui, &response);
+    // gap 可起选/触发双击，但不进双击高亮 rect（避免短行右侧空白铺蓝）。
+    span_group_note(ui, &response, false);
     // 单击空白不留选区；按住拖过才选中中间正文。
     if response.clicked() && !response.double_clicked() && !response.triple_clicked() {
         ui.ctx()
@@ -1713,7 +1714,7 @@ fn add_sel_label(ui: &mut Ui, lab: Label) -> egui::Response {
             Stroke::NONE,
         );
     }
-    span_group_note(ui, &response);
+    span_group_note(ui, &response, true);
     response
 }
 
@@ -1753,7 +1754,7 @@ fn paint_code_chip(
         CODE_FG,
         Stroke::NONE,
     );
-    span_group_note(ui, &response);
+    span_group_note(ui, &response, true);
 }
 
 fn spans_plain_text(spans: &[MdSpan]) -> String {
@@ -1797,14 +1798,17 @@ fn span_group_begin(ui: &Ui, id: egui::Id) {
     });
 }
 
-fn span_group_note(ui: &Ui, resp: &egui::Response) {
+/// `paint`：是否计入双击高亮矩形。正文 true；行尾/块间 gap false（仍可触发 dbl）。
+fn span_group_note(ui: &Ui, resp: &egui::Response, paint: bool) {
     let dbl = resp.double_clicked() || resp.triple_clicked();
     let rect = resp.rect;
     ui.ctx().data_mut(|d| {
         let key = egui::Id::new("preview_span_stack");
         if let Some(mut stack) = d.get_temp::<Vec<SpanGroupAcc>>(key) {
             if let Some(acc) = stack.last_mut() {
-                acc.rects.push(rect);
+                if paint {
+                    acc.rects.push(rect);
+                }
                 if dbl {
                     acc.dbl = true;
                 }
