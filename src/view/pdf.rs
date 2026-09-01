@@ -78,6 +78,8 @@ pub struct PdfSession {
     layout_avail_w: f32,
     last_scroll_y: f32,
     bar_dragging: bool,
+    vis_lo: usize,
+    vis_hi: usize,
     pending_page: Option<usize>,
     sel_page: i32,
     sel_lo: i32,
@@ -108,6 +110,8 @@ impl PdfSession {
             layout_avail_w: -1.0,
             last_scroll_y: 0.0,
             bar_dragging: false,
+            vis_lo: 0,
+            vis_hi: 0,
             pending_page: None,
             sel_page: -1,
             sel_lo: -1,
@@ -150,15 +154,29 @@ impl PdfSession {
         self.dragging = false;
     }
 
-    fn poll(&mut self, ctx: &Context) {
-        let Some(eng) = self.engine.as_ref() else {
-            return;
-        };
+    fn page_nearby(&self, page: u32) -> bool {
+        page_nearby(page, self.vis_lo as u32, self.vis_hi as u32, 2)
+    }
+
+    fn forget_loading(&mut self, page: u32) {
+        let i = page as usize;
+        if i < self.slots.len() && matches!(&self.slots[i], Slot::Loading { .. }) {
+            self.slots[i] = Slot::Empty;
+        }
+    }
+
+    fn poll(&mut self, ctx: &Context, upload: bool) {
+        let mut evs = Vec::new();
+        if let Some(eng) = self.engine.as_ref() {
+            while let Ok(ev) = eng.rx.try_recv() {
+                evs.push(ev);
+            }
+        }
         let mut got = false;
-        while let Ok(ev) = eng.rx.try_recv() {
-            got = true;
+        for ev in evs {
             match ev {
                 PdfEvent::Ready(meta) => {
+                    got = true;
                     self.page_count = meta.page_count;
                     self.sizes = meta.sizes;
                     self.slots = (0..self.page_count).map(|_| Slot::Empty).collect();
@@ -169,6 +187,7 @@ impl PdfSession {
                     self.layout_zoom = -1.0;
                 }
                 PdfEvent::PageFailed(page) => {
+                    got = true;
                     let i = page as usize;
                     if i < self.slots.len() {
                         if matches!(&self.slots[i], Slot::Ready { .. }) {
@@ -181,11 +200,13 @@ impl PdfSession {
                     }
                 }
                 PdfEvent::Failed(e) => {
+                    got = true;
                     if self.page_count == 0 {
                         self.err = Some(e);
                     }
                 }
                 PdfEvent::Text { page, chars } => {
+                    got = true;
                     let i = page as usize;
                     if i < self.chars.len() {
                         self.chars[i] = Some(chars);
@@ -197,11 +218,16 @@ impl PdfSession {
                     if i >= self.slots.len() {
                         continue;
                     }
+                    if !upload || !self.page_nearby(px.page) {
+                        self.forget_loading(px.page);
+                        continue;
+                    }
                     if let Slot::Ready { width: have, .. } = &self.slots[i] {
                         if width_close(*have, px.width) && *have >= px.width {
                             continue;
                         }
                     }
+                    got = true;
                     let img = ColorImage::from_rgba_unmultiplied(
                         [px.px_w as usize, px.px_h as usize],
                         &px.rgba,
@@ -236,6 +262,7 @@ impl PdfSession {
         ppp: f32,
         prefetch: i32,
         want_text: bool,
+        pause: bool,
     ) {
         let Some(eng) = self.engine.as_ref() else {
             return;
@@ -246,7 +273,12 @@ impl PdfSession {
         let n = self.page_count as i32;
         let lo = (vis_lo as i32 - prefetch).max(0) as usize;
         let hi = ((vis_hi as i32) + prefetch).min(n - 1) as usize;
+        self.vis_lo = vis_lo;
+        self.vis_hi = vis_hi;
         eng.set_vis(lo as u32, hi as u32);
+        if pause {
+            return;
+        }
         for i in lo..=hi {
             let (pw, _) = self.sizes.get(i).copied().unwrap_or((612.0, 792.0));
             let width = page_render_width(pw, ppp, self.zoom);
@@ -320,6 +352,10 @@ impl PdfSession {
     }
 }
 
+fn page_nearby(page: u32, vis_lo: u32, vis_hi: u32, pad: u32) -> bool {
+    page + pad >= vis_lo && page <= vis_hi.saturating_add(pad)
+}
+
 /// 按页顶/高二分可见区间（Sumatra DisplayModel：不扫全部页）。
 fn visible_page_range(tops: &[f32], hs: &[f32], clip_top: f32, clip_bot: f32) -> (usize, usize) {
     let n = tops.len();
@@ -360,12 +396,25 @@ pub enum PdfAction {
 }
 
 pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction {
-    st.poll(ui.ctx());
     if let Some(p) = jump {
         st.jump_to(p);
     }
     let mut ui = crate::view::pane_ui(ui);
     ui.painter().rect_filled(ui.max_rect(), 0.0, BG);
+    let pointer = ui.input(|i| i.pointer.interact_pos());
+    let primary_pressed = ui.input(|i| i.pointer.primary_pressed());
+    let primary_down = ui.input(|i| i.pointer.primary_down());
+    let primary_released = ui.input(|i| i.pointer.primary_released());
+    if primary_released {
+        st.bar_dragging = false;
+    } else if primary_down {
+        let pane = ui.max_rect();
+        let bar = Rect::from_min_max(pos2(pane.right() - 22.0, pane.top()), pane.max);
+        if pointer.map(|p| bar.contains(p)).unwrap_or(false) {
+            st.bar_dragging = true;
+        }
+    }
+    st.poll(ui.ctx(), !st.bar_dragging);
     if let Some(err) = &st.err {
         ui.add_space(24.0);
         ui.label(RichText::new(err).color(Color32::from_rgb(0xB9, 0x1C, 0x1C)));
@@ -400,10 +449,6 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
         _ => {}
     }
     let jump_page = st.pending_page.take();
-    let pointer = ui.input(|i| i.pointer.interact_pos());
-    let primary_pressed = ui.input(|i| i.pointer.primary_pressed());
-    let primary_down = ui.input(|i| i.pointer.primary_down());
-    let primary_released = ui.input(|i| i.pointer.primary_released());
     st.ensure_layout(avail_w);
 
     let sa = crate::view::content_scroll(false)
@@ -418,7 +463,9 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
             let content_w = st.content_w.max(avail_w);
             ui.set_min_width(content_w);
             let origin = ui.cursor().min;
-            ui.allocate_exact_size(Vec2::new(content_w, st.content_h), Sense::hover());
+            let content = Rect::from_min_size(origin, Vec2::new(content_w, st.content_h));
+            ui.expand_to_include_rect(content);
+            ui.advance_cursor_after_rect(content);
             if let Some(p) = jump_page {
                 if p < st.page_tops.len() {
                     let top = origin.y + st.page_tops[p];
@@ -486,6 +533,9 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
                                     egui::Image::new((raster.tex.id(), disp)),
                                 );
                                 draw_sel(ui, st, i, page_rect, pw, ph);
+                                if st.bar_dragging {
+                                    return;
+                                }
                                 let resp = ui.interact(
                                     page_rect,
                                     ui.id().with(("pdf-page", i)),
@@ -584,13 +634,21 @@ pub fn show(ui: &mut Ui, st: &mut PdfSession, jump: Option<usize>) -> PdfAction 
     }
     st.last_scroll_y = offset_y;
     let prefetch = if st.bar_dragging { 0 } else { PREFETCH };
-    st.request_visible(vis_lo, vis_hi, ppp, prefetch, !st.bar_dragging);
+    st.request_visible(
+        vis_lo,
+        vis_hi,
+        ppp,
+        prefetch,
+        !st.bar_dragging,
+        st.bar_dragging,
+    );
     st.drop_far_pages(vis_lo, vis_hi);
-    let busy = (vis_lo..=vis_hi).any(|i| match st.slots.get(i) {
-        Some(Slot::Empty | Slot::Loading { .. }) => true,
-        Some(Slot::Ready { pending: Some(_), .. }) => true,
-        _ => false,
-    });
+    let busy = !st.bar_dragging
+        && (vis_lo..=vis_hi).any(|i| match st.slots.get(i) {
+            Some(Slot::Empty | Slot::Loading { .. }) => true,
+            Some(Slot::Ready { pending: Some(_), .. }) => true,
+            _ => false,
+        });
     if busy {
         ui.ctx().request_repaint();
     }
@@ -863,6 +921,14 @@ mod tests {
         assert_eq!(w, 816);
         let hi = page_render_width(612.0, 4.0, 8.0);
         assert_eq!(hi, 2400);
+    }
+
+    #[test]
+    fn nearby_band_matches_sumatra_pad() {
+        assert!(page_nearby(100, 100, 102, 2));
+        assert!(page_nearby(98, 100, 102, 2));
+        assert!(!page_nearby(50, 100, 102, 2));
+        assert!(!page_nearby(200, 100, 102, 2));
     }
 
     #[test]

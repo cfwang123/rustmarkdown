@@ -17,7 +17,7 @@
 | Sumatra | 本程序应对 |
 | --- | --- |
 | 只 Paint 可见页；`FreeNotVisible` | 预计算 page_tops，二分可见区间，只建可见页 widget |
-| 拖滚动条 `SB_THUMBTRACK` 立刻改偏移；worker `PageVisibleNearby` 否则丢掉 | 拖条时不预取/不抽字；开渲前看 vis band，已滚走的页跳过 |
+| 拖滚动条 `SB_THUMBTRACK` 立刻改偏移；`pauseRendering`；worker `PageVisibleNearby` 否则丢掉 | 拖条时不上 GPU 纹理、不发新光栅；松手后再渲当前页 |
 | 队列最多 8 个请求；同页不同 zoom 则 abort | worker 合并，同页只留最新 width |
 | 缺精确 tile 时先 blit 旧图 / 低清 | `Ready` 保留旧 raster，`pending` 表示在重画 |
 | 预测渲染最多 4 页、链式、一次一页 | 可见 ±2 页；远页丢纹理 |
