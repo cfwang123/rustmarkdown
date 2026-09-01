@@ -66,6 +66,8 @@ pub fn show(
             i.events.retain(|e| !is_undo_redo_key(e));
         });
     }
+    // 用窗格矩形判断双击：ScrollArea 内 max_rect 只在内容顶部，滚下去后点不中。
+    let steal = crate::view::text_sel::multi_click_over(&ui, ui.max_rect());
     let sa = crate::view::content_scroll(true)
         .id_salt("editor_scroll")
         .max_height(max_h)
@@ -96,7 +98,6 @@ pub fn show(
                     st.store(ui.ctx(), id);
                 }
             }
-            let steal = crate::view::text_sel::multi_click_over(ui, ui.max_rect());
             let stashed_sel = if steal >= 2 {
                 None
             } else {

@@ -24,7 +24,7 @@ Implemented:
 - App icon (title bar / taskbar / exe)
 - Release / double-click exe: no console window
 - Input UIs cancel with Esc: password / unsaved / quit / reload / error / about dialogs, find bar, outline filter, explorer path, settings
-- Source and preview: double-click expands to the characters before whitespace, `' " ( )`, backtick, comma, and Chinese punctuation `，。、‘“’”（）？`; triple-click selects the line. Source double-click no longer waits 0.5–1 s
+- Source and preview: double-click expands to the characters before whitespace, `' " ( )`, backtick, comma, and Chinese punctuation `，。、‘“’”（）？` (`: / \` stay in the token); triple-click selects the line. Source double-click no longer waits 0.5–1 s, including when scrolled down a long file
 - Settings (Ctrl+,): a separate Windows dialog always in front of the main window, centered on it when opened (UI language Chinese / English, Markdown tab width, heading auto-number, max image width, master log switch); stored in `%LocalAppData%\rustmarkdown\settings.json`
 - Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root; reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
 - Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file

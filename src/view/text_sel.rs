@@ -7,6 +7,7 @@ use egui::text_selection::LabelSelectionState;
 use egui::{Color32, Galley, PointerButton, Pos2, Response, Stroke, Ui};
 
 /// 双击扩选停在这些字符之前（不含）：空白、引号、括号、反引号、逗号、中文标点。
+/// `: / \` 不算分隔符，路径和 URL 会整段选中。
 pub fn is_sel_break(c: char) -> bool {
     if c.is_whitespace() {
         return true;
@@ -90,14 +91,16 @@ pub fn range_at(text: &str, char_idx: usize, triple: bool) -> CCursorRange {
     CCursorRange::two(CCursor::new(a), CCursor::new(b))
 }
 
-/// 指针在 `area` 内的双击=2、三击=3，否则 0。
+/// 指针在 `area` 或当前 clip 内的双击=2、三击=3，否则 0。
+/// 长文滚动后内容区 max_rect 只在顶部，必须同时看 clip。
 pub fn multi_click_over(ui: &Ui, area: egui::Rect) -> u8 {
+    let clip = ui.clip_rect();
     ui.input(|i| {
         let over = i
             .pointer
             .interact_pos()
             .or(i.pointer.hover_pos())
-            .is_some_and(|p| area.contains(p));
+            .is_some_and(|p| area.contains(p) || clip.contains(p));
         if !over {
             return 0;
         }
@@ -213,6 +216,16 @@ mod tests {
         let s = r"D:\a\b.md";
         assert_eq!(expand_token(s, 3), (0, s.chars().count()));
         assert_eq!(expand_token("foo.bar", 4), (0, 7));
+    }
+
+    #[test]
+    fn token_colon_slash_backslash_not_break() {
+        let url = "http://example.com/a";
+        assert_eq!(expand_token(url, 4), (0, url.chars().count()));
+        assert_eq!(expand_token("a/b/c", 2), (0, 5));
+        let win = r"C:\Windows\a.md";
+        assert_eq!(expand_token(win, 3), (0, win.chars().count()));
+        assert_eq!(expand_token("key:value", 1), (0, 9));
     }
 
     #[test]
