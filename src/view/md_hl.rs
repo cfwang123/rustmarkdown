@@ -85,9 +85,8 @@ static PARA: LazyLock<Mutex<Option<ParaMem>>> = LazyLock::new(|| Mutex::new(None
 static FENCE_CACHE: LazyLock<Mutex<Option<FenceCache>>> = LazyLock::new(|| Mutex::new(None));
 /// 上一帧编辑区有选区或按着鼠标：本帧 layouter 早于 TextEdit 更新光标，仍须先掏空。
 static NEED_SEL_HOLLOW: AtomicBool = AtomicBool::new(false);
-/// 同一份缓存 Galley + 同一视口行集合，复用已掏空结果（空闲帧几乎零成本）。
-static HOLLOW_CACHE: LazyLock<Mutex<Option<(usize, Vec<usize>, usize, Arc<egui::Galley>)>>> =
-    LazyLock::new(|| Mutex::new(None));
+/// 本帧掏空结果，给 editor.show 慢日志对照。
+static LAST_HOLLOW: Mutex<String> = Mutex::new(String::new());
 
 fn heading_fg(_lv: usize) -> Color32 {
     BODY
@@ -430,6 +429,18 @@ pub fn note_sel_paint(need: bool) {
     NEED_SEL_HOLLOW.store(need, Ordering::Relaxed);
 }
 
+pub(crate) fn last_hollow_log() -> String {
+    LAST_HOLLOW
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+fn remember_hollow(msg: String) {
+    let mut g = LAST_HOLLOW.lock().unwrap_or_else(|e| e.into_inner());
+    *g = msg;
+}
+
 fn dummy_row(ui: &egui::Ui) -> Option<Arc<egui::epaint::text::Row>> {
     static DUMMY: LazyLock<Mutex<Option<Arc<egui::epaint::text::Row>>>> =
         LazyLock::new(|| Mutex::new(None));
@@ -541,7 +552,8 @@ pub(crate) fn apply_sel_hollow(
 
 /// egui 拖选会 `Arc::make_mut` 整份 Galley 再 `make_mut` 每一行网格。
 /// 排版在 TextEdit 更新光标之前：若仍返回缓存里带网格的共享 Arc，选区画会把约 2500 行网格深拷贝约 2 秒。
-/// 行数超过视口上限时每帧都掏空视口外网格（不依赖本帧是否已有选区）；同一份缓存 Arc 复用结果。
+/// 行数超过视口上限时每帧都掏空视口外网格（不依赖本帧是否已有选区）。
+/// 不缓存掏空后的 Arc：缓存再交给 TextEdit 会使 Row 引用计数 >1，`make_mut` 仍深拷贝。
 fn hollow_offscreen_sel(
     ui: &egui::Ui,
     galley: Arc<egui::Galley>,
@@ -550,6 +562,7 @@ fn hollow_offscreen_sel(
     let t0 = std::time::Instant::now();
     let last = galley.rows.len().saturating_sub(1);
     if last == 0 {
+        remember_hollow("skip rows=1".into());
         return galley;
     }
     let large = last > VIS_KEEP_MAX;
@@ -584,21 +597,21 @@ fn hollow_offscreen_sel(
     }
     let need = expanding || has_sel || prev || large;
     if !need {
+        remember_hollow(format!(
+            "skip need=0 rows={} large={large}",
+            galley.rows.len()
+        ));
         return galley;
     }
-    let Some(dummy) = dummy_row(ui) else {
+    let dummy = dummy_row(ui).or_else(|| dummy_from_galley(&galley));
+    let Some(dummy) = dummy else {
+        remember_hollow(format!("skip dummy rows={}", galley.rows.len()));
+        if crate::io::log::enabled() {
+            crate::io::log::write("hollow skip: no dummy");
+        }
         return galley;
     };
     let vis = vis_rows_capped(&galley, ui.cursor().top(), ui.clip_rect());
-    let src_ptr = Arc::as_ptr(&galley) as usize;
-    {
-        let cache = HOLLOW_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((p, v, c, out)) = cache.as_ref() {
-            if *p == src_ptr && *v == vis && *c == caret {
-                return out.clone();
-            }
-        }
-    }
     let (out, n_keep, n_hollow) = apply_sel_hollow(
         galley,
         dummy.as_ref(),
@@ -608,20 +621,30 @@ fn hollow_offscreen_sel(
         &vis,
         expanding || has_sel || prev || large,
     );
-    {
-        let mut cache = HOLLOW_CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        *cache = Some((src_ptr, vis.clone(), caret, out.clone()));
-    }
-    crate::io::log::slow(
-        &format!(
-            "hollow keep={n_keep} hollow={n_hollow} vis={} galley_rows={} drag={dragging} sel_all={sel_all} prev={prev} large={large}",
-            vis.len(),
-            out.rows.len()
-        ),
-        t0,
-        20.0,
+    let n_vert: usize = out
+        .rows
+        .iter()
+        .map(|r| r.row.visuals.mesh.vertices.len())
+        .sum();
+    let info = format!(
+        "hollow keep={n_keep} hollow={n_hollow} vis={} galley_rows={} vert={n_vert} drag={dragging} sel_all={sel_all} prev={prev} large={large}",
+        vis.len(),
+        out.rows.len()
     );
+    remember_hollow(info.clone());
+    if n_vert > 100_000 && crate::io::log::enabled() {
+        crate::io::log::write(&format!("hollow leak {info}"));
+    }
+    crate::io::log::slow(&info, t0, 20.0);
     out
+}
+
+fn dummy_from_galley(galley: &egui::Galley) -> Option<Arc<egui::epaint::text::Row>> {
+    let src = galley.rows.first()?;
+    let mut row = (*src.row).clone();
+    row.glyphs.clear();
+    row.visuals = RowVisuals::default();
+    Some(Arc::new(row))
 }
 
 /// 查找命中与预览映射底色：叠在已排版行上，避免为此重排整篇。
@@ -2233,6 +2256,11 @@ mod tests {
                 .iter()
                 .filter(|r| !r.row.visuals.mesh.vertices.is_empty())
                 .count();
+            assert_eq!(
+                Arc::strong_count(&galley),
+                1,
+                "掏空后的 Galley 不能和缓存共享，否则选区画 make_mut 会深拷贝"
+            );
             assert!(
                 n_mesh <= 160 + 8 * 2 + 4,
                 "无选区时仍带着整篇网格: mesh_rows={n_mesh}/{n_rows}"
@@ -2247,5 +2275,133 @@ mod tests {
                 "共享 Galley 未掏空导致选区画太慢: {paint_ms:.0}ms mesh_rows={n_mesh}"
             );
         });
+    }
+
+    #[test]
+    fn editor_show_ctrl_a_2026_md_under_200ms() {
+        let path = r"D:\VS_Projects\公司文档\工作日清表\工作动态\2026年.md";
+        let mut text = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("读 2026年.md 失败: {e} ({path})"));
+        assert!(text.len() > 100_000);
+        let mut undoer = egui::util::undoer::Undoer::default();
+        let ctx = egui::Context::default();
+        theme::install_fonts(&ctx);
+        let run = |ctx: &egui::Context,
+                   events: Vec<egui::Event>,
+                   modifiers: egui::Modifiers,
+                   text: &mut String,
+                   undoer: &mut egui::util::undoer::Undoer<String>| {
+            let mut raw = egui::RawInput::default();
+            raw.screen_rect = Some(Rect::from_min_size(
+                pos2(0.0, 0.0),
+                egui::vec2(1280.0, 800.0),
+            ));
+            raw.events = events;
+            raw.modifiers = modifiers;
+            raw.focused = true;
+            let mut ms = 0.0;
+            let mut sel = 0usize;
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let t0 = std::time::Instant::now();
+                    let out = crate::view::editor::show(
+                        ui, text, None, None, &[], None, undoer,
+                    );
+                    ms = t0.elapsed().as_secs_f64() * 1000.0;
+                    sel = out.sel_chars;
+                });
+            });
+            (ms, sel)
+        };
+        let jump_run = |ctx: &egui::Context,
+                        text: &mut String,
+                        undoer: &mut egui::util::undoer::Undoer<String>,
+                        jump: Option<usize>| {
+            let mut raw = egui::RawInput::default();
+            raw.screen_rect = Some(Rect::from_min_size(
+                pos2(0.0, 0.0),
+                egui::vec2(1280.0, 800.0),
+            ));
+            raw.focused = true;
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    let _ = crate::view::editor::show(
+                        ui, text, jump, None, &[], None, undoer,
+                    );
+                });
+            });
+        };
+        jump_run(&ctx, &mut text, &mut undoer, Some(2335));
+        jump_run(&ctx, &mut text, &mut undoer, None);
+        let (ms0, _) = run(
+            &ctx,
+            vec![],
+            egui::Modifiers::NONE,
+            &mut text,
+            &mut undoer,
+        );
+        let click = pos2(400.0, 300.0);
+        let _ = run(
+            &ctx,
+            vec![
+                egui::Event::PointerMoved(click),
+                egui::Event::PointerButton {
+                    pos: click,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            egui::Modifiers::NONE,
+            &mut text,
+            &mut undoer,
+        );
+        let _ = run(
+            &ctx,
+            vec![egui::Event::PointerButton {
+                pos: click,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            egui::Modifiers::NONE,
+            &mut text,
+            &mut undoer,
+        );
+        let (ms_a, sel_a) = run(
+            &ctx,
+            vec![egui::Event::Key {
+                key: egui::Key::A,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::COMMAND,
+            }],
+            egui::Modifiers::COMMAND,
+            &mut text,
+            &mut undoer,
+        );
+        let (ms_hold, sel_hold) = run(
+            &ctx,
+            vec![],
+            egui::Modifiers::NONE,
+            &mut text,
+            &mut undoer,
+        );
+        eprintln!(
+            "2026年.md editor.show warmup={ms0:.0}ms ctrl_a={ms_a:.0}ms sel={sel_a} hold={ms_hold:.0}ms sel={sel_hold}"
+        );
+        assert!(
+            sel_a > 40_000 || sel_hold > 40_000,
+            "Ctrl+A 没选中: sel_a={sel_a} sel_hold={sel_hold}"
+        );
+        assert!(
+            ms_a < 200.0,
+            "editor.show Ctrl+A 太慢: {ms_a:.0}ms sel={sel_a}"
+        );
+        assert!(
+            ms_hold < 200.0,
+            "editor.show 选区保持太慢: {ms_hold:.0}ms sel={sel_hold}"
+        );
     }
 }

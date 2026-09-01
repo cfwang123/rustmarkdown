@@ -2,6 +2,8 @@
 
 ## unreleased
 
+- 源码长文再卡约 2 秒：掏空后的 Galley 曾放进缓存再交给 TextEdit，Row 的 `Arc` 引用计数 >1，拖选/Ctrl+A 时 egui `paint_text_selection` 仍 `make_mut` 深拷贝整篇网格。改为每帧掏空成独立 Arc（视口外丢掉网格、保留字形），dummy 行失败时用文档首行兜底，避免跳过掏空。慢帧日志补上 `editor.text_edit` 的行数/顶点数。
+
 - 预览复制链接文字不再多出空格：egui 跨 Label 复制会在汉字链接两侧插空格（`请看[文档](u)` 变成「请看 文档」），复制时挤掉汉字之间的多余空格。
 
 - 预览裸文本自动链接：只有 `http://` / `https://` 当成网址；`k://`、`ftp://` 这类 scheme 不再误判成盘符路径。

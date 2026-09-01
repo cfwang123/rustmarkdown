@@ -96,6 +96,7 @@ pub fn show(
                     st.store(ui.ctx(), id);
                 }
             }
+            let t_te = std::time::Instant::now();
             let mut te = egui::TextEdit::multiline(text)
                 .id_salt(crate::view::md_hl::EDITOR_ID_SALT)
                 .code_editor()
@@ -104,6 +105,27 @@ pub fn show(
                 .frame(false)
                 .layouter(&mut layouter)
                 .show(ui);
+            if crate::io::log::enabled() {
+                let ms = t_te.elapsed().as_secs_f64() * 1000.0;
+                if ms >= crate::io::log::SPAN_MS {
+                    let n_rows = te.galley.rows.len();
+                    let n_mesh = te.galley
+                        .rows
+                        .iter()
+                        .filter(|r| !r.row.visuals.mesh.vertices.is_empty())
+                        .count();
+                    let n_vert: usize = te
+                        .galley
+                        .rows
+                        .iter()
+                        .map(|r| r.row.visuals.mesh.vertices.len())
+                        .sum();
+                    crate::io::log::write(&format!(
+                        "editor.text_edit {ms:.0}ms rows={n_rows} mesh={n_mesh} vert={n_vert} {}",
+                        crate::view::md_hl::last_hollow_log()
+                    ));
+                }
+            }
             let clip = te.text_clip_rect.intersect(ui.clip_rect());
             ui.painter().set(
                 fence_bg_idx,
