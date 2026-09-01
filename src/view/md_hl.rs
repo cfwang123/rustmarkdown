@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 
 use egui::epaint::text::RowVisuals;
+use egui::text::CCursorRange;
 use egui::{pos2, Align, Color32, FontId, Rect, Shape, Stroke, TextFormat, TextStyle};
 
 use crate::view::highlight::LineHl;
@@ -429,6 +430,65 @@ pub fn editor_widget_id(ui: &egui::Ui) -> egui::Id {
 /// 编辑区本帧画完后调用：有选区或按着主键时，下一帧 layouter 仍须掏空网格。
 pub fn note_sel_paint(need: bool) {
     NEED_SEL_HOLLOW.store(need, Ordering::Relaxed);
+}
+
+/// 超过这么多字符的选区，静止时改叠画，避免 egui 对每一行 `make_mut` 卡约 2 秒。
+const LARGE_SEL_CHARS: usize = 400;
+
+pub(crate) fn should_collapse_sel(char_span: usize, keep_native: bool) -> bool {
+    !keep_native && char_span > LARGE_SEL_CHARS
+}
+
+fn keep_native_sel(ui: &egui::Ui) -> bool {
+    ui.input(|i| {
+        if i.pointer.primary_down() {
+            return true;
+        }
+        i.events.iter().any(|e| {
+            !matches!(
+                e,
+                egui::Event::PointerMoved(_)
+                    | egui::Event::MouseMoved(_)
+                    | egui::Event::PointerGone
+            )
+        })
+    })
+}
+
+/// 大选区且没有编辑/拖选事件时，先收成光标，让 TextEdit 别整篇画选区。返回被收起的选区。
+pub(crate) fn collapse_large_sel(ui: &egui::Ui) -> Option<CCursorRange> {
+    let id = editor_widget_id(ui);
+    let mut st = egui::TextEdit::load_state(ui.ctx(), id)?;
+    let range = st.cursor.char_range().filter(|r| !r.is_empty())?;
+    let [min, max] = range.sorted_cursors();
+    let span = max.index.saturating_sub(min.index);
+    if !should_collapse_sel(span, keep_native_sel(ui)) {
+        return None;
+    }
+    st.cursor.set_char_range(Some(CCursorRange::one(range.primary)));
+    st.store(ui.ctx(), id);
+    Some(range)
+}
+
+pub(crate) fn restore_sel(ui: &egui::Ui, id: egui::Id, range: CCursorRange) {
+    if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), id) {
+        st.cursor.set_char_range(Some(range));
+        st.store(ui.ctx(), id);
+    }
+}
+
+pub(crate) fn selection_bgs(
+    galley: &egui::Galley,
+    galley_pos: egui::Pos2,
+    clip: Rect,
+    range: CCursorRange,
+) -> Shape {
+    let [min, max] = range.sorted_cursors();
+    if min.index >= max.index {
+        return Shape::Noop;
+    }
+    let col = Color32::from_rgba_unmultiplied(0x37, 0x80, 0xCE, 90);
+    paint_char_bgs(galley, galley_pos, clip, &[(min.index, max.index, col)])
 }
 
 pub(crate) fn last_hollow_log() -> String {
@@ -2152,6 +2212,13 @@ mod tests {
         assert!(wrap_close(800, 864, false));
         assert!(!wrap_close(800, 880, false));
         assert!(wrap_close(800, 2000, true));
+    }
+
+    #[test]
+    fn collapse_large_sel_idle_only() {
+        assert!(should_collapse_sel(5000, false));
+        assert!(!should_collapse_sel(10, false));
+        assert!(!should_collapse_sel(5000, true));
     }
 
     #[test]

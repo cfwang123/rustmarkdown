@@ -96,6 +96,7 @@ pub fn show(
                     st.store(ui.ctx(), id);
                 }
             }
+            let stashed_sel = crate::view::md_hl::collapse_large_sel(ui);
             let t_te = std::time::Instant::now();
             let mut te = egui::TextEdit::multiline(text)
                 .id_salt(crate::view::md_hl::EDITOR_ID_SALT)
@@ -127,23 +128,43 @@ pub fn show(
                 }
             }
             let clip = te.text_clip_rect.intersect(ui.clip_rect());
+            let sel_bg = if let Some(range) = stashed_sel {
+                let native = te.cursor_range.filter(|r| !r.is_empty());
+                if native.is_none() {
+                    crate::view::md_hl::restore_sel(ui, te.response.id, range);
+                    te.cursor_range = Some(range);
+                    crate::view::md_hl::selection_bgs(
+                        te.galley.as_ref(),
+                        te.galley_pos,
+                        clip,
+                        range,
+                    )
+                } else {
+                    Shape::Noop
+                }
+            } else {
+                Shape::Noop
+            };
             ui.painter().set(
                 fence_bg_idx,
                 merge_bg(
-                    fence_block_bg(
-                        te.galley.as_ref(),
-                        te.galley_pos,
-                        clip,
-                        te.response.rect,
-                        text,
+                    merge_bg(
+                        fence_block_bg(
+                            te.galley.as_ref(),
+                            te.galley_pos,
+                            clip,
+                            te.response.rect,
+                            text,
+                        ),
+                        crate::view::md_hl::overlay_bgs(
+                            te.galley.as_ref(),
+                            te.galley_pos,
+                            clip,
+                            text,
+                            &overlay,
+                        ),
                     ),
-                    crate::view::md_hl::overlay_bgs(
-                        te.galley.as_ref(),
-                        te.galley_pos,
-                        clip,
-                        text,
-                        &overlay,
-                    ),
+                    sel_bg,
                 ),
             );
             out.changed = te.response.changed() || undo_pin.is_some();
