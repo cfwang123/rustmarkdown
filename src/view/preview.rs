@@ -1994,12 +1994,14 @@ fn span_group_begin(ui: &Ui, id: egui::Id) {
 }
 
 fn span_group_note(ui: &Ui, resp: &egui::Response) {
+    let dbl = resp.double_clicked() || resp.triple_clicked();
+    let rect = resp.rect;
     ui.ctx().data_mut(|d| {
         let key = egui::Id::new("preview_span_stack");
         if let Some(mut stack) = d.get_temp::<Vec<SpanGroupAcc>>(key) {
             if let Some(acc) = stack.last_mut() {
-                acc.rects.push(resp.rect);
-                if resp.double_clicked() || resp.triple_clicked() {
+                acc.rects.push(rect);
+                if dbl {
                     acc.dbl = true;
                 }
             }
@@ -2380,15 +2382,18 @@ mod tests {
         let mut img = crate::io::imgcache::ImgCache::default();
         let mut mermaid = crate::io::mermaid::MermaidCache::default();
         let opts = PreviewOpts::default();
-        let click = pos2(220.0, 100.0);
+        let want = "E2025242扬子嘉盛：4台电脑安装常用软件、系统更新、驱动更新（90%）。";
         let mut t = 0.0_f64;
-        let mut step = |events: Vec<egui::Event>| {
+        let mut step = |events: Vec<egui::Event>, pos: egui::Pos2| -> String {
+            let mut evs = events;
+            evs.insert(0, egui::Event::PointerMoved(pos));
             let mut raw = egui::RawInput::default();
             raw.screen_rect = Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 700.0)));
-            raw.events = events;
+            raw.events = evs;
             raw.focused = true;
             raw.time = Some(t);
             t += 0.08;
+            let mut pick_text = String::new();
             let _ = ctx.run(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let mut ev = Vec::new();
@@ -2397,20 +2402,52 @@ mod tests {
                         None,
                     );
                 });
+                if let Some(p) = ctx.data(|d| {
+                    d.get_temp::<PreviewLinePick>(egui::Id::new("preview_line_pick"))
+                }) {
+                    pick_text = p.text;
+                }
             });
+            pick_text
         };
-        step(vec![egui::Event::PointerMoved(click)]);
-        let btn = |pressed: bool| egui::Event::PointerButton {
-            pos: click,
+        let btn = |pos: egui::Pos2, pressed: bool| egui::Event::PointerButton {
+            pos,
             button: egui::PointerButton::Primary,
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        step(vec![btn(true)]);
-        step(vec![btn(false)]);
-        step(vec![btn(true)]);
-        step(vec![btn(false)]);
-        step(vec![]);
+        let mut pick_text = String::new();
+        let mut ok = false;
+        for y in [40.0, 70.0, 100.0, 130.0, 160.0] {
+            for x in [80.0, 160.0, 240.0, 320.0] {
+                let click = pos2(x, y);
+                let _ = step(vec![], click);
+                let _ = step(vec![btn(click, true)], click);
+                let _ = step(vec![btn(click, false)], click);
+                let _ = step(vec![btn(click, true)], click);
+                let _ = step(vec![btn(click, false)], click);
+                pick_text = step(vec![], click);
+                if pick_text.contains("扬子嘉盛") && pick_text.contains("90%") {
+                    ok = true;
+                    break;
+                }
+            }
+            if ok {
+                break;
+            }
+        }
+        assert!(
+            ok,
+            "预览双击应选中整条列表项，got={pick_text:?} want contains 扬子嘉盛/90%"
+        );
+        assert!(
+            !pick_text.contains(" 台"),
+            "复制文本不应在数字和汉字之间多空格: {pick_text:?}"
+        );
+        assert!(
+            pick_text.contains(want) || pick_text.replace(' ', "") == want.replace(' ', ""),
+            "got={pick_text:?}"
+        );
     }
 
     #[test]

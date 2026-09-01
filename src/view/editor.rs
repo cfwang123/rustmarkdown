@@ -668,7 +668,7 @@ mod tests {
         let mut undoer = egui::util::undoer::Undoer::default();
         let click = egui::pos2(40.0, 24.0);
         let mut t = 0.0_f64;
-        let mut run = |mut events: Vec<egui::Event>| -> usize {
+        let mut run = |mut events: Vec<egui::Event>| -> (usize, usize, usize) {
             events.insert(0, egui::Event::PointerMoved(click));
             let mut raw = egui::RawInput::default();
             raw.screen_rect = Some(egui::Rect::from_min_size(
@@ -681,12 +681,17 @@ mod tests {
             raw.time = Some(t);
             t += 0.08;
             let mut sel = 0usize;
+            let mut a = 0usize;
+            let mut b = 0usize;
             let _ = ctx.run(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
-                    sel = super::show(ui, &mut text, None, None, &[], None, &mut undoer).sel_chars;
+                    let out = super::show(ui, &mut text, None, None, &[], None, &mut undoer);
+                    sel = out.sel_chars;
+                    a = out.sel_start;
+                    b = out.sel_end;
                 });
             });
-            sel
+            (sel, a, b)
         };
         let _ = run(vec![]);
         let btn = |pressed: bool| egui::Event::PointerButton {
@@ -695,18 +700,20 @@ mod tests {
             pressed,
             modifiers: egui::Modifiers::NONE,
         };
-        let s1 = run(vec![btn(true)]);
-        let s2 = run(vec![btn(false)]);
-        let s3 = run(vec![btn(true)]);
-        let sel_dbl = run(vec![btn(false)]);
-        let sel_hold = run(vec![]);
-        assert!(
-            sel_dbl >= 5,
-            "双击应选中词，sels press1={s1} rel1={s2} press2={s3} dbl={sel_dbl} hold={sel_hold}"
+        let _ = run(vec![btn(true)]);
+        let _ = run(vec![btn(false)]);
+        let _ = run(vec![btn(true)]);
+        let (sel_dbl, a, b) = run(vec![btn(false)]);
+        let (sel_hold, ah, bh) = run(vec![]);
+        let got: String = text.chars().skip(a.min(b)).take(a.abs_diff(b)).collect();
+        let hold: String = text.chars().skip(ah.min(bh)).take(ah.abs_diff(bh)).collect();
+        assert_eq!(
+            got, "abcdefghij",
+            "双击应选中整词 abcdefghij，sel={sel_dbl} {a}..{b} got={got:?}"
         );
-        assert!(
-            sel_hold >= 5,
-            "双击选区下一帧消失: dbl={sel_dbl} hold={sel_hold}"
+        assert_eq!(
+            hold, "abcdefghij",
+            "下一帧选区应保持，sel={sel_hold} {ah}..{bh} hold={hold:?}"
         );
     }
 }
