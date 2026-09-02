@@ -306,6 +306,7 @@ fn set_preview_click_sel(ui: &Ui, sel: PreviewClickSel) {
 }
 
 /// 预览 Label 选区。双击扩词、三击选视觉行（与源码分隔符规则一致）；空 galley 多击帧不走 egui 分词。
+/// `multi_click_sel == false` 时双击/三击不扩选（供长代码块双击折叠占用）。
 pub fn paint_selectable_galley(
     ui: &Ui,
     response: &Response,
@@ -313,6 +314,18 @@ pub fn paint_selectable_galley(
     galley: Arc<Galley>,
     color: Color32,
     underline: Stroke,
+) {
+    paint_selectable_galley_ex(ui, response, galley_pos, galley, color, underline, true);
+}
+
+pub fn paint_selectable_galley_ex(
+    ui: &Ui,
+    response: &Response,
+    galley_pos: Pos2,
+    galley: Arc<Galley>,
+    color: Color32,
+    underline: Stroke,
+    multi_click_sel: bool,
 ) {
     let text = galley.text();
     let empty = text.is_empty();
@@ -336,7 +349,7 @@ pub fn paint_selectable_galley(
         clear_preview_click_sel(ui);
     }
 
-    if !empty && click_n >= 2 && response.contains_pointer() {
+    if multi_click_sel && !empty && click_n >= 2 && response.contains_pointer() {
         if let Some(pos) = pointer {
             let idx = galley.cursor_from_pos(pos - galley_pos).index;
             let range = range_at_galley(galley.as_ref(), idx, click_n >= 3);
@@ -380,8 +393,8 @@ pub fn paint_selectable_galley(
         return;
     }
 
-    if empty && click_n >= 2 {
-        // 空 galley 上 egui 双击分词会 usize 下溢崩 Debug。
+    // 空 galley，或禁用多击扩选时的多击帧：不走 egui 分词（会崩 / 抢折叠手势）。
+    if click_n >= 2 && (empty || !multi_click_sel) {
         ui.painter().galley(galley_pos, galley, color);
         let _ = underline;
         return;

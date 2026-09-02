@@ -991,7 +991,15 @@ fn show_code(
             };
             let mut job = highlight::code_job(&src, &b.lang);
             job_sel(&mut job, piece_in_sel(hint, &src));
-            add_sel_label(ui, egui::Label::new(job).wrap());
+            // 可折叠长代码：双击正文切换展开/收起（不走双击扩词）。
+            let code_resp = add_sel_label_ex(ui, egui::Label::new(job).wrap(), !foldable);
+            if foldable && code_resp.double_clicked() {
+                if expanded {
+                    st.code_open.remove(&b.line0);
+                } else {
+                    st.code_open.insert(b.line0);
+                }
+            }
             if foldable {
                 let more = n_lines.saturating_sub(CODE_FOLD_LINES);
                 let txt = if expanded {
@@ -1699,16 +1707,21 @@ fn add_inline_code(ui: &mut Ui, text: &str, size: f32, hint: &str) {
 }
 
 fn add_sel_label(ui: &mut Ui, lab: Label) -> egui::Response {
+    add_sel_label_ex(ui, lab, true)
+}
+
+fn add_sel_label_ex(ui: &mut Ui, lab: Label, multi_click_sel: bool) -> egui::Response {
     let (pos, galley, response) = lab.layout_in_ui(ui);
     if ui.is_rect_visible(response.rect) {
         let color = ui.style().visuals.text_color();
-        crate::view::text_sel::paint_selectable_galley(
+        crate::view::text_sel::paint_selectable_galley_ex(
             ui,
             &response,
             pos,
             galley,
             color,
             Stroke::NONE,
+            multi_click_sel,
         );
     }
     response
