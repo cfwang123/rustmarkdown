@@ -991,13 +991,42 @@ fn show_code(
             };
             let mut job = highlight::code_job(&src, &b.lang);
             job_sel(&mut job, piece_in_sel(hint, &src));
-            // 可折叠长代码：双击正文切换展开/收起（不走双击扩词）。
+            // 可折叠长代码：双击正文（含行尾右侧空白）切换展开/收起，不走双击扩词。
+            let body_left = ui.cursor().left();
+            let body_w = ui.available_width().max(1.0);
             let code_resp = add_sel_label_ex(ui, egui::Label::new(job).wrap(), !foldable);
-            if foldable && code_resp.double_clicked() {
-                if expanded {
-                    st.code_open.remove(&b.line0);
-                } else {
-                    st.code_open.insert(b.line0);
+            if foldable {
+                let body_right = body_left + body_w;
+                // 行尾右侧空白不在 Label 命中内：补一块可点区域，避免点穿。
+                if body_right > code_resp.rect.right() + 1.0 {
+                    let blank = Rect::from_min_max(
+                        pos2(code_resp.rect.right(), code_resp.rect.top()),
+                        pos2(body_right, code_resp.rect.bottom()),
+                    );
+                    let _ = ui.interact(
+                        blank,
+                        ui.id().with(("code_body_blank", b.line0)),
+                        Sense::click(),
+                    );
+                }
+                let body_rect = Rect::from_min_max(
+                    pos2(body_left, code_resp.rect.top()),
+                    pos2(body_right, code_resp.rect.bottom()),
+                );
+                // 文字或空白上双击都切换（Label 缩成内容宽时右侧空白也算）。
+                let dbl_body = ui.input(|i| {
+                    i.pointer.button_double_clicked(egui::PointerButton::Primary)
+                        && i.pointer
+                            .interact_pos()
+                            .or(i.pointer.hover_pos())
+                            .is_some_and(|p| body_rect.contains(p))
+                });
+                if dbl_body {
+                    if st.code_open.contains(&b.line0) {
+                        st.code_open.remove(&b.line0);
+                    } else {
+                        st.code_open.insert(b.line0);
+                    }
                 }
             }
             if foldable {
