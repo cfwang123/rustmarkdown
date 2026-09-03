@@ -1,6 +1,6 @@
 # rustmarkdown
 
-Version **1.0.2**. [English](README.md) · [Changelog](CHANGELOG.md)
+Version **1.0.3**. [English](README.md) · [Changelog](CHANGELOG.md)
 
 Windows 优先的 Markdown 预览 / 编辑器，Rust + egui 原生绘制，**不依赖浏览器内核**。三种视图：代码、侧边预览、预览。多标签，拖放打开文件 / 文件夹 / `.lnk`，也可只读打开 **DOC / DOCX、XLS·XLSX、PDF、图片**。
 

@@ -4866,9 +4866,10 @@ mod adopt_window_tests {
                 lpszClassName: class_name.as_ptr(),
             };
             assert_ne!(RegisterClassW(&wc), 0, "RegisterClassW failed");
-            let root_title: Vec<u16> = "2026年.md — rustmarkdown v1.0.2\0"
-                .encode_utf16()
-                .collect();
+            let root_title_text =
+                format!("2026年.md — rustmarkdown v{}", env!("CARGO_PKG_VERSION"));
+            let mut root_title: Vec<u16> = root_title_text.encode_utf16().collect();
+            root_title.push(0);
             let child_title: Vec<u16> = "参数设置\0".encode_utf16().collect();
             let root = CreateWindowExW(
                 0,
@@ -4899,7 +4900,7 @@ mod adopt_window_tests {
                 std::ptr::null(),
             );
             assert!(!root.is_null() && !child.is_null(), "CreateWindowExW failed");
-            adopt_child_window("2026年.md — rustmarkdown v1.0.2", "参数设置");
+            adopt_child_window(&root_title_text, "参数设置");
             let owner = GetWindowLongPtrW(child, GWLP_HWNDPARENT);
             assert_eq!(owner, root as isize, "child was not adopted by root");
             let _ = DestroyWindow(child);

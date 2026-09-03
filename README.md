@@ -1,6 +1,6 @@
 # rustmarkdown
 
-Version **1.0.2**. [中文说明](README.zh.md) · [Changelog](CHANGELOG.md)
+Version **1.0.3**. [中文说明](README.zh.md) · [Changelog](CHANGELOG.md)
 
 A Windows-first Markdown preview / editor rendered natively in Rust + egui — **no browser engine**. Three views: source, side-by-side, preview. Multi-tab, drag-and-drop of files / folders / `.lnk`, plus read-only previews for DOC / DOCX, XLS / XLSX, PDF, and images.
 

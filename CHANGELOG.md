@@ -3,7 +3,7 @@
 All notable changes to rustmarkdown are documented here. / 本文档记录 rustmarkdown 的重要变更。
 Format based on [Keep a Changelog](https://keepachangelog.com/). / 格式基于 Keep a Changelog。
 
-## unreleased
+## v1.0.3 (2026-09-03)
 
 ### English
 
