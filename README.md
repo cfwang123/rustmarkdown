@@ -2,7 +2,7 @@
 
 Version **1.0.2**. [中文说明](README.zh.md) · [Changelog](CHANGELOG.md)
 
-A Windows-first Markdown preview / editor rendered natively in Rust + egui — **no browser engine**. Three views: source, side-by-side, preview. Multi-tab, drag-and-drop of files / folders / `.lnk`, plus read-only previews for DOC / DOCX, XLS / XLSX, PDF, and images (aligned with docview).
+A Windows-first Markdown preview / editor rendered natively in Rust + egui — **no browser engine**. Three views: source, side-by-side, preview. Multi-tab, drag-and-drop of files / folders / `.lnk`, plus read-only previews for DOC / DOCX, XLS / XLSX, PDF, and images.
 
 ## Editing and preview
 
@@ -24,7 +24,7 @@ A Windows-first Markdown preview / editor rendered natively in Rust + egui — *
 
 ## Tabs, windows and sidebar
 
-- Multi-tab: drag reorder, middle-click close, right-click close others / all, reopen (Ctrl+Shift+T), recent files (last 20); tear-off into a new window and merge (docview-aligned).
+- Multi-tab: drag reorder, middle-click close, right-click close others / all, reopen (Ctrl+Shift+T), recent files (last 20); tear-off into a new window and merge.
 - Session restore: files / modes / scroll / workspace root / window size and position (`session.json`); only the active tab reads disk at startup.
 - Sidebar (F4): Explorer folder tree (lazy load, path bar, up/back/forward/refresh, set as workspace) + Outline (filter, scroll-sync highlight, jump).
 - Back / forward (Alt+← / Alt+→) from outline clicks, anchors and in-doc links; status bar shows mode / lines / encoding / tab width.
@@ -32,7 +32,7 @@ A Windows-first Markdown preview / editor rendered natively in Rust + egui — *
 ## Settings and updates
 
 - Settings dialog (Ctrl+,): UI language (中文 / English), tab width, heading auto-number, max image width, logs, **auto-update interval**.
-- **Check for Updates** (Help menu): queries GitHub Releases, downloads the `.7z` with progress, then quits, replaces the install directory, and restarts (aligned with ScreenKit); startup auto-check on the interval (default 7 days, 0 = off); GitHub goes through the local proxy `127.0.0.1:7897` with a direct fallback.
+- **Check for Updates** (Help menu): queries GitHub Releases, downloads the `.7z` with progress, then quits, replaces the install directory, and restarts (aligned with ScreenKit); startup auto-check on the interval (default 7 days, 0 = off); GitHub API is queried directly.
 - Window title shows the version; settings and recent files are stored in `%LocalAppData%\rustmarkdown\`.
 
 ## Command line

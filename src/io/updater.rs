@@ -1,6 +1,6 @@
 //! 自更新：查 GitHub Releases → 下载 .7z → 复制自身到数据目录 → 命令行解压覆盖安装目录。
 //! 流程对齐 ScreenKit `AppUpdater`；检查间隔与上次检查时间存 settings.json（对齐 SerialTool / ScreenKit）。
-//! 网络走本机代理 127.0.0.1:7897（GitHub 为非国内站点），传输层失败再直连一次。
+//! 网络默认直连 GitHub，不配置代理。
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -24,8 +24,6 @@ fn latest_api_url() -> String {
 }
 const UPDATER_EXE: &str = "rustmarkdown_updater.exe";
 const MAIN_EXE: &str = "rustmarkdown.exe";
-/// 本机代理（对齐其它程序的默认配置）。
-const PROXY_ADDR: &str = "http://127.0.0.1:7897";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 const CHECK_READ_TIMEOUT: Duration = Duration::from_secs(20);
 const DOWNLOAD_READ_TIMEOUT: Duration = Duration::from_secs(30);
@@ -405,37 +403,25 @@ fn fmt_utc(secs: i64) -> String {
 
 // ───────── 网络 ─────────
 
-fn agent_with(proxy: bool, read_timeout: Duration) -> ureq::Agent {
-    let mut b = ureq::AgentBuilder::new()
+/// 直连 GitHub（默认不配置代理）。
+fn agent(read_timeout: Duration) -> ureq::Agent {
+    ureq::AgentBuilder::new()
         .timeout_connect(CONNECT_TIMEOUT)
-        .timeout_read(read_timeout);
-    if proxy {
-        if let Ok(p) = ureq::Proxy::new(PROXY_ADDR) {
-            b = b.proxy(p);
-        }
-    }
-    b.build()
+        .timeout_read(read_timeout)
+        .build()
 }
 
 fn get_call(url: &str, read_timeout: Duration) -> Result<ureq::Response, String> {
-    // 先走本机代理（GitHub 需代理），传输层失败再直连；HTTP 状态错误不换通道。
-    let mut last = String::new();
-    for use_proxy in [true, false] {
-        match agent_with(use_proxy, read_timeout)
-            .get(url)
-            .set("User-Agent", &format!("rustmarkdown-updater/{}", current_version()))
-            .set("Accept", "application/vnd.github+json")
-            .call()
-        {
-            Ok(resp) => return Ok(resp),
-            Err(ureq::Error::Status(code, _)) => {
-                last = format!("HTTP {code}");
-                break;
-            }
-            Err(ureq::Error::Transport(t)) => last = t.to_string(),
-        }
+    match agent(read_timeout)
+        .get(url)
+        .set("User-Agent", &format!("rustmarkdown-updater/{}", current_version()))
+        .set("Accept", "application/vnd.github+json")
+        .call()
+    {
+        Ok(resp) => Ok(resp),
+        Err(ureq::Error::Status(code, _)) => Err(format!("HTTP {code}")),
+        Err(ureq::Error::Transport(t)) => Err(t.to_string()),
     }
-    Err(last)
 }
 
 fn get_text(url: &String) -> Result<String, String> {
