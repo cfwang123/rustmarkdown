@@ -26,6 +26,7 @@ Implemented:
 - Input UIs cancel with Esc: password / unsaved / quit / reload / error / about dialogs, find bar, outline filter, explorer path, settings
 - Source and preview: double-click expands to the characters before CJK/Latin punctuation (spaces stay in the token; `: ： % # / \` and `.` are not breaks, so URLs/paths/anchors select whole); triple-click selects the line (visual wrapped row in preview); leading/trailing whitespace is trimmed. Source double-click keeps the selection (no flash). Copy does not insert extra spaces between CJK and Latin/digits. Source double-click no longer waits 0.5–1 s, including when scrolled down a long file
 - Settings (Ctrl+,): a separate Windows dialog always in front of the main window, centered on it when opened (UI language Chinese / English, Markdown tab width, heading auto-number, max image width, master log switch); stored in `%LocalAppData%\rustmarkdown\settings.json`
+- Check for updates (Help → “Check for Updates...”): queries GitHub Releases for the latest version, downloads the `.7z`, then quits, replaces the install directory, and restarts (aligned with ScreenKit’s `AppUpdater`); a startup auto-check runs on the configured interval (default 7 days, 0 = off; interval and last-check time are stored in `settings.json`) and asks when a new version is found; GitHub traffic goes through the local proxy `127.0.0.1:7897` with a direct fallback when the proxy is unavailable
 - Launch with no args restores last files, view mode, and scroll (`session.json`), plus the explorer workspace root and the main window size/position (if that rect is off-screen, size is kept and position falls back to the OS default); only the active tab is read from disk at startup, other tabs load when selected; reopening the same file also restores mode and position; CLI paths take precedence (a file argument still restores the last workspace)
 - Double-click image overlay (wheel zoom, pan, Esc / click backdrop to close); close button only, no black title strip; right-click copy image / copy as file
 - Preview task lists (`- [ ]` / `- [x]`) read-only
@@ -64,7 +65,7 @@ Later: light/dark theme, UI zoom.
 
 - Windows x64 (other platforms may build; not the primary test target)
 - Rust 1.80+ (rustup stable recommended)
-- Pack: Node.js, 7-Zip (`7z` on PATH, or the default install location)
+- Pack: Node.js, 7-Zip (`7z` on PATH, or the default install location); self-update also needs 7-Zip to extract `.7z`
 
 ## Build and run
 

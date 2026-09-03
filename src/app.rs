@@ -1,4 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Key, Modifiers, ViewportBuilder, ViewportCommand, ViewportId};
@@ -14,6 +17,7 @@ use crate::io::session::{
     find_file_view, Session, SessionTab, WindowGeom, upsert_file_view,
 };
 use crate::io::settings::Settings;
+use crate::io::updater::{self, UpdateInfo};
 use crate::tabs::{self, TabBarEvent};
 use crate::view;
 use crate::view::find::{self, FindBarEvent};
@@ -274,6 +278,7 @@ enum MenuCmd {
     Mode(ViewMode),
     Toggle,
     Settings,
+    CheckUpdate,
     About,
     Sidebar,
     NavBack,
@@ -397,6 +402,27 @@ enum VimAsk {
     Retype { win: usize, tab: usize },
 }
 
+/// 更新后台线程 → UI 的事件。
+enum UpdEvent {
+    Check(Result<UpdateInfo, String>),
+    Download(Result<PathBuf, updater::DownloadFail>),
+}
+
+/// 检查更新流程状态机。
+enum UpdFlow {
+    Idle,
+    /// 手动「检查更新...」进行中（显示进度窗）。
+    ManualCheck,
+    /// 手动检查完成：展示结果 / 错误。
+    ManualResult { info: Option<UpdateInfo>, err: Option<String> },
+    /// 自动检查发现新版本：弹窗询问。
+    Suggest { info: UpdateInfo },
+    /// 下载中，可取消。
+    Downloading { info: UpdateInfo, pct: f32, cancel: Arc<AtomicBool> },
+    /// 下载完成，待确认退出并应用。
+    ApplyAsk { info: UpdateInfo, archive: PathBuf },
+}
+
 struct PendingImg {
     href: String,
     title: String,
@@ -428,6 +454,13 @@ pub struct App {
     incoming: Option<crate::io::single::Incoming>,
     vim_ask: Option<VimAsk>,
     vim_pw: String,
+    upd_tx: Sender<UpdEvent>,
+    upd_rx: Receiver<UpdEvent>,
+    upd_prog_rx: Option<Receiver<f32>>,
+    upd_flow: UpdFlow,
+    upd_manual_cancelled: bool,
+    /// 启动时的自动检查线程是否在跑（期间禁止手动检查，避免结果串线）。
+    upd_auto_checking: bool,
 }
 
 fn recompute_find_tab(tab: &mut Tab) {
@@ -455,6 +488,7 @@ impl App {
             crate::io::mermaid::warmup();
         });
         let sess = Session::load();
+        let (upd_tx, upd_rx) = mpsc::channel();
         let mut app = Self {
             wins: vec![Win::new()],
             cur: 0,
@@ -480,6 +514,12 @@ impl App {
             incoming: Some(incoming),
             vim_ask: None,
             vim_pw: String::new(),
+            upd_tx,
+            upd_rx,
+            upd_prog_rx: None,
+            upd_flow: UpdFlow::Idle,
+            upd_manual_cancelled: false,
+            upd_auto_checking: false,
         };
         crate::io::single::attach_ui(&cc.egui_ctx);
         i18n::set(app.settings.ui_lang);
@@ -513,6 +553,20 @@ impl App {
                     app.restore_workspace(s.workspace.as_deref());
                 }
             }
+        }
+        // 按设置的间隔自动检查更新（后台线程，不阻塞启动；结果通过 channel 回 UI）。
+        if updater::auto_due(app.settings.update_check_days, app.settings.last_update_check) {
+            app.upd_auto_checking = true;
+            let tx = app.upd_tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            std::thread::Builder::new()
+                .name("rmd-upd-check".into())
+                .spawn(move || {
+                    std::thread::sleep(Duration::from_secs(1));
+                    let _ = tx.send(UpdEvent::Check(updater::check_latest()));
+                    ctx.request_repaint();
+                })
+                .ok();
         }
         let now = app.capture_session();
         now.save();
@@ -1289,6 +1343,7 @@ impl App {
                 }
             }
             MenuCmd::Settings => self.open_settings(),
+            MenuCmd::CheckUpdate => self.start_check_update(ctx),
             MenuCmd::About => self.dialog = Some(Dialog::About),
             MenuCmd::Sidebar => self.toggle_sidebar(),
             MenuCmd::NavBack => self.nav_back(),
@@ -1774,6 +1829,365 @@ impl App {
         }
     }
 
+    // ───────── 检查更新（对齐 ScreenKit AppUpdater + SerialTool 间隔） ─────────
+
+    /// 菜单「检查更新...」：手动检查并展示结果窗口。
+    fn start_check_update(&mut self, ctx: &egui::Context) {
+        if !matches!(self.upd_flow, UpdFlow::Idle) || self.upd_auto_checking {
+            self.status = t().update_busy.to_string();
+            return;
+        }
+        self.upd_manual_cancelled = false;
+        self.upd_flow = UpdFlow::ManualCheck;
+        let tx = self.upd_tx.clone();
+        let ctx2 = ctx.clone();
+        std::thread::Builder::new()
+            .name("rmd-upd-check".into())
+            .spawn(move || {
+                let _ = tx.send(UpdEvent::Check(updater::check_latest()));
+                ctx2.request_repaint();
+            })
+            .ok();
+    }
+
+    fn start_download(&mut self, ctx: &egui::Context, info: UpdateInfo) {
+        let tx = self.upd_tx.clone();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let dl_cancel = cancel.clone();
+        let dl_info = info.clone();
+        let dir = updater::download_dir();
+        let ctx2 = ctx.clone();
+        let (ptx, prx) = mpsc::channel::<f32>();
+        self.upd_prog_rx = Some(prx);
+        std::thread::Builder::new()
+            .name("rmd-upd-dl".into())
+            .spawn(move || {
+                let r = updater::download(&dl_info, &dir, ptx, dl_cancel, Some(ctx2));
+                let _ = tx.send(UpdEvent::Download(r));
+            })
+            .ok();
+        self.upd_flow = UpdFlow::Downloading {
+            info,
+            pct: 0.0,
+            cancel,
+        };
+    }
+
+    fn poll_updater(&mut self) {
+        if let Some(rx) = &self.upd_prog_rx {
+            while let Ok(p) = rx.try_recv() {
+                if let UpdFlow::Downloading { pct, .. } = &mut self.upd_flow {
+                    *pct = p;
+                }
+            }
+        }
+        while let Ok(ev) = self.upd_rx.try_recv() {
+            match ev {
+                UpdEvent::Check(r) => self.on_check_done(r),
+                UpdEvent::Download(r) => self.on_download_done(r),
+            }
+        }
+    }
+
+    fn on_check_done(&mut self, r: Result<UpdateInfo, String>) {
+        if self.upd_manual_cancelled {
+            // 手动检查被取消，结果丢弃（不记上次检查，下回启动仍会到期检查）。
+            self.upd_manual_cancelled = false;
+            self.upd_flow = UpdFlow::Idle;
+            return;
+        }
+        if self.upd_auto_checking {
+            // 启动时的自动检查：不弹结果窗，只在发现新版本时询问。
+            self.upd_auto_checking = false;
+            match r {
+                Ok(info) => {
+                    self.mark_update_checked();
+                    if info.has_update {
+                        self.upd_flow = UpdFlow::Suggest { info };
+                    } else {
+                        self.upd_flow = UpdFlow::Idle;
+                        self.status = i18n::update_latest(&info.version);
+                    }
+                }
+                Err(e) => {
+                    self.upd_flow = UpdFlow::Idle;
+                    self.status = i18n::update_check_fail(&e);
+                }
+            }
+            return;
+        }
+        match r {
+            Ok(info) => {
+                self.mark_update_checked();
+                self.upd_flow = UpdFlow::ManualResult {
+                    info: Some(info),
+                    err: None,
+                };
+            }
+            Err(e) => {
+                self.upd_flow = UpdFlow::ManualResult {
+                    info: None,
+                    err: Some(e),
+                };
+            }
+        }
+    }
+
+    fn on_download_done(&mut self, r: Result<PathBuf, updater::DownloadFail>) {
+        match r {
+            Ok(archive) => {
+                if let UpdFlow::Downloading { info, .. } =
+                    std::mem::replace(&mut self.upd_flow, UpdFlow::Idle)
+                {
+                    self.upd_flow = UpdFlow::ApplyAsk { info, archive };
+                }
+            }
+            Err(updater::DownloadFail::Cancelled) => {
+                self.upd_flow = UpdFlow::Idle;
+            }
+            Err(updater::DownloadFail::Msg(e)) => {
+                self.upd_flow = UpdFlow::Idle;
+                self.status = i18n::update_download_fail(&e);
+            }
+        }
+    }
+
+    fn mark_update_checked(&mut self) {
+        self.settings.last_update_check = updater::now_unix();
+        self.settings.save();
+    }
+
+    /// 确认应用更新：启动更新器（等待本进程退出后覆盖安装目录），随后关闭窗口。
+    fn apply_update_now(&mut self, ctx: &egui::Context, archive: &Path) {
+        self.persist_session();
+        self.flush_session(None, true);
+        match updater::launch_updater(archive) {
+            Ok(()) => {
+                // 不再走未保存询问：直接以「不保存关闭」语义退出。
+                for w in &mut self.wins {
+                    for t in &mut w.tabs {
+                        t.doc.dirty = false;
+                    }
+                }
+                self.upd_flow = UpdFlow::Idle;
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+            Err(e) => {
+                self.upd_flow = UpdFlow::Idle;
+                self.status = i18n::update_apply_fail(&e);
+            }
+        }
+    }
+
+    fn show_updater_ui(&mut self, ctx: &egui::Context) {
+        let esc = ctx.input(|i| i.key_pressed(Key::Escape));
+        match &self.upd_flow {
+            UpdFlow::Idle => {}
+            UpdFlow::ManualCheck => {
+                let mut cancel = false;
+                egui::Window::new(t().update_title)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(t().update_checking);
+                        });
+                        ui.add_space(8.0);
+                        if ui.button(t().cancel).clicked() {
+                            cancel = true;
+                        }
+                    });
+                if cancel || esc {
+                    self.upd_manual_cancelled = true;
+                    self.upd_flow = UpdFlow::Idle;
+                }
+            }
+            UpdFlow::ManualResult { info, err } => {
+                let (info, err) = (info.clone(), err.clone());
+                let mut act = 0; // 0 无 1 下载 2 打开发布页 3 关闭
+                egui::Window::new(t().update_title)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        if let Some(e) = &err {
+                            ui.colored_label(
+                                Color32::from_rgb(0xB9, 0x1C, 0x1C),
+                                i18n::update_check_fail(e),
+                            );
+                        } else if let Some(info) = &info {
+                            if info.has_update {
+                                ui.label(i18n::update_cur_latest(
+                                    updater::current_version(),
+                                    &info.version,
+                                ));
+                                ui.add_space(6.0);
+                                ui.label(format!(
+                                    "{}（{}）",
+                                    info.asset_name,
+                                    updater::fmt_size(info.size)
+                                ));
+                                ui.add_space(6.0);
+                                ui.label(t().update_ask_download);
+                            } else {
+                                ui.label(i18n::update_latest(updater::current_version()));
+                            }
+                        } else {
+                            ui.label(t().update_no_asset);
+                        }
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if let Some(info) = &info {
+                                if info.has_update && ui.button(t().update_download).clicked() {
+                                    act = 1;
+                                }
+                                if ui.button(t().update_open_page).clicked() {
+                                    act = 2;
+                                }
+                            }
+                            if ui.button(t().close).clicked() {
+                                act = 3;
+                            }
+                        });
+                    });
+                if esc && act == 0 {
+                    act = 3;
+                }
+                match act {
+                    1 => {
+                        if let Some(info) = info {
+                            self.start_download(ctx, info);
+                        }
+                    }
+                    2 => {
+                        if let Some(info) = &info {
+                            self.open_href(&info.html_url);
+                        }
+                        self.upd_flow = UpdFlow::Idle;
+                    }
+                    3 => self.upd_flow = UpdFlow::Idle,
+                    _ => {}
+                }
+            }
+            UpdFlow::Suggest { info } => {
+                let info = info.clone();
+                let mut act = 0; // 0 无 1 下载 2 打开发布页 3 忽略
+                egui::Window::new(t().update_title)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(i18n::update_found_auto(
+                            updater::current_version(),
+                            &info.version,
+                        ));
+                        ui.add_space(6.0);
+                        ui.label(format!(
+                            "{}（{}）",
+                            info.asset_name,
+                            updater::fmt_size(info.size)
+                        ));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(t().update_download).clicked() {
+                                act = 1;
+                            }
+                            if ui.button(t().update_open_page).clicked() {
+                                act = 2;
+                            }
+                            if ui.button(t().update_ignore).clicked() {
+                                act = 3;
+                            }
+                        });
+                    });
+                if esc && act == 0 {
+                    act = 3;
+                }
+                match act {
+                    1 => self.start_download(ctx, info),
+                    2 => {
+                        self.open_href(&info.html_url);
+                        self.upd_flow = UpdFlow::Idle;
+                    }
+                    3 => self.upd_flow = UpdFlow::Idle,
+                    _ => {}
+                }
+            }
+            UpdFlow::Downloading {
+                info,
+                pct,
+                cancel,
+            } => {
+                let (info, pct, cancel) = (info.clone(), *pct, cancel.clone());
+                let mut cancelled = false;
+                egui::Window::new(t().update_title)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(i18n::update_downloading(&info.asset_name));
+                        ui.add_space(6.0);
+                        ui.add(egui::ProgressBar::new(pct).show_percentage());
+                        if cancel.load(Ordering::Relaxed) {
+                            ui.add_space(6.0);
+                            ui.label(RichText::new(t().update_cancelling).weak());
+                        }
+                        ui.add_space(8.0);
+                        ui.add_enabled_ui(!cancelled, |ui| {
+                            if ui.button(t().update_download_cancel).clicked() {
+                                cancelled = true;
+                            }
+                        });
+                    });
+                if (cancelled || esc) && !cancel.load(Ordering::Relaxed) {
+                    cancel.store(true, Ordering::Relaxed);
+                }
+            }
+            UpdFlow::ApplyAsk { info, archive } => {
+                let (info, archive) = (info.clone(), archive.clone());
+                let mut act = 0; // 0 无 1 立即更新 2 打开下载文件夹 3 稍后
+                egui::Window::new(t().update_title)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .show(ctx, |ui| {
+                        ui.label(i18n::update_ready(
+                            &info.asset_name,
+                            &updater::fmt_size(info.size),
+                            &info.version,
+                        ));
+                        ui.add_space(10.0);
+                        ui.horizontal(|ui| {
+                            if ui.button(t().update_apply_now).clicked() {
+                                act = 1;
+                            }
+                            if ui.button(t().update_open_dir).clicked() {
+                                act = 2;
+                            }
+                            if ui.button(t().update_later).clicked() {
+                                act = 3;
+                            }
+                        });
+                    });
+                if esc && act == 0 {
+                    act = 3;
+                }
+                match act {
+                    1 => self.apply_update_now(ctx, &archive),
+                    2 => {
+                        if let Err(e) = opener::open(updater::download_dir()) {
+                            self.status = i18n::cannot_open(e);
+                        }
+                    }
+                    3 => self.upd_flow = UpdFlow::Idle,
+                    _ => {}
+                }
+            }
+        }
+    }
+
     fn preview_opts(&self) -> PreviewOpts {
         PreviewOpts {
             heading_auto_number: self.settings.md_heading_auto_number,
@@ -1949,6 +2363,9 @@ impl App {
             });
             any_open |= menubar_hover_switch(ui, &ir, bar_open);
             let ir = ui.menu_button(t().menu_help, |ui| {
+                if menu_item(ui, t().menu_check_update, "", true) {
+                    cmd = Some(MenuCmd::CheckUpdate);
+                }
                 if menu_item(ui, t().about_app, "", true) {
                     cmd = Some(MenuCmd::About);
                 }
@@ -3432,7 +3849,7 @@ impl App {
                 .as_deref(),
         );
         let need_focus = self.settings_need_focus;
-        let size = [500.0, 540.0];
+        let size = [520.0, 660.0];
         let pos = if need_focus {
             let parent = self
                 .wins
@@ -3448,7 +3865,7 @@ impl App {
             title,
             &root_title,
             size,
-            [400.0, 360.0],
+            [400.0, 480.0],
             true,
             pos,
             |ui| {
@@ -3521,6 +3938,35 @@ impl App {
                 ui.add_space(12.0);
                 ui.checkbox(&mut draft.enable_logs, t().enable_logs);
                 ui.label(RichText::new(t().logs_help).weak());
+                ui.add_space(12.0);
+                ui.label(RichText::new(t().update_settings).strong().size(15.0));
+                let mut auto = draft.update_check_days > 0;
+                if ui.checkbox(&mut auto, t().update_auto_check).changed() {
+                    draft.update_check_days = if auto { 7 } else { 0 };
+                }
+                ui.add_enabled_ui(auto, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(t().update_interval_days);
+                        let label = draft.update_check_days.to_string();
+                        egui::ComboBox::from_id_salt("update_check_days")
+                            .selected_text(label)
+                            .show_ui(ui, |ui| {
+                                for n in Settings::update_days_choices() {
+                                    ui.selectable_value(&mut draft.update_check_days, *n, n.to_string());
+                                }
+                            });
+                    });
+                });
+                let last = draft.last_update_check;
+                if last > 0 {
+                    let s = updater::fmt_local(last);
+                    if !s.is_empty() {
+                        ui.label(i18n::update_last_check(&s));
+                    }
+                } else {
+                    ui.label(i18n::update_last_check(t().update_never));
+                }
+                ui.label(RichText::new(t().update_auto_help).weak());
                 ui.add_space(16.0);
                 ui.label(RichText::new(t().notes).strong().size(15.0));
                 ui.label(RichText::new(notes).weak());
@@ -4181,7 +4627,9 @@ impl eframe::App for App {
         self.handle_dropped(ctx);
         self.poll_watch();
         self.poll_pending_img(ctx);
+        self.poll_updater();
         self.show_dialogs(ctx);
+        self.show_updater_ui(ctx);
         self.ui_window(ctx, 0);
         self.show_settings(ctx);
         self.show_img_overlay(ctx);

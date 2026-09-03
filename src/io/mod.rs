@@ -9,6 +9,7 @@ pub mod session;
 pub mod settings;
 pub mod shell_link;
 pub mod single;
+pub mod updater;
 pub mod vimcrypt;
 pub mod watch;
 pub mod word;

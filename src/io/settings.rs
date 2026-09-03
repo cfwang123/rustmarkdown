@@ -35,6 +35,13 @@ pub struct Settings {
     /// 界面语言（zh / en）。默认中文。
     #[serde(rename = "uiLang", default)]
     pub ui_lang: Lang,
+    /// 自动检查更新间隔（天）。0 = 关闭。默认 7。
+    /// 不写字段级 default：结构体级 `#[serde(default)]` 会回落到 `Settings::default()`（7）。
+    #[serde(rename = "updateCheckDays")]
+    pub update_check_days: i32,
+    /// 上次成功检查更新的 Unix 秒。0 = 从未。
+    #[serde(rename = "lastUpdateCheck")]
+    pub last_update_check: i64,
 }
 
 impl Default for Settings {
@@ -48,6 +55,8 @@ impl Default for Settings {
             recent_files: Vec::new(),
             enable_logs: false,
             ui_lang: Lang::Zh,
+            update_check_days: 7,
+            last_update_check: 0,
         }
     }
 }
@@ -69,6 +78,11 @@ impl Settings {
         }
     }
 
+    /// 自动检查更新间隔（天）可选值。
+    pub fn update_days_choices() -> &'static [i32] {
+        &[1, 3, 7, 14, 30]
+    }
+
     pub fn normalize(&mut self) {
         if self.md_tab_size < 1 {
             self.md_tab_size = 1;
@@ -87,6 +101,15 @@ impl Settings {
         }
         if self.side_panel_width > 480 {
             self.side_panel_width = 480;
+        }
+        if self.update_check_days < 0 {
+            self.update_check_days = 0;
+        }
+        if self.update_check_days > 3650 {
+            self.update_check_days = 3650;
+        }
+        if self.last_update_check < 0 {
+            self.last_update_check = 0;
         }
         if self.recent_files.len() > 20 {
             self.recent_files.truncate(20);
@@ -180,6 +203,32 @@ mod tests {
         let t: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(t, Settings::default());
         assert_eq!(t.md_img_max_width, 0);
+        assert_eq!(t.update_check_days, 7);
+        assert_eq!(t.last_update_check, 0);
+    }
+
+    #[test]
+    fn update_days_normalize() {
+        let mut s = Settings {
+            update_check_days: -5,
+            ..Default::default()
+        };
+        s.normalize();
+        assert_eq!(s.update_check_days, 0);
+        s.update_check_days = 99999;
+        s.normalize();
+        assert_eq!(s.update_check_days, 3650);
+        s.last_update_check = -2;
+        s.normalize();
+        assert_eq!(s.last_update_check, 0);
+        let j = serde_json::to_string(&Settings {
+            update_check_days: 3,
+            last_update_check: 123,
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(j.contains("\"updateCheckDays\":3"));
+        assert!(j.contains("\"lastUpdateCheck\":123"));
     }
 
     #[test]

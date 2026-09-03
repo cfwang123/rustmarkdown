@@ -124,6 +124,46 @@ tr_def! {
     sidebar: "目录侧栏", "Sidebar";
     settings_ellipsis: "参数设置...", "Settings...";
     about_app: "关于 rustmarkdown", "About rustmarkdown";
+    menu_check_update: "检查更新...", "Check for Updates...";
+    update_title: "检查更新", "Check for Updates";
+    update_checking: "正在检查更新…", "Checking for updates…";
+    update_latest: "已是最新版本（{0}）", "You are up to date ({0})";
+    update_cur_latest: "当前版本 {0} → 最新版本 {1}", "Current {0} → Latest {1}";
+    update_found_auto: "发现新版本 {0}（当前 {1}）。\n是否现在下载并更新？", "New version {0} found (current {1}).\nDownload and install now?";
+    update_ask_download: "是否下载并更新？", "Download and install now?";
+    update_download: "下载并更新", "Download & Install";
+    update_open_page: "打开发布页", "Open Releases Page";
+    update_later: "稍后", "Later";
+    update_ignore: "忽略", "Ignore";
+    update_downloading: "正在下载 {0}…", "Downloading {0}…";
+    update_download_cancel: "取消下载", "Cancel Download";
+    update_cancelling: "正在取消…", "Cancelling…";
+    update_ready: "下载完成（{0}，{1}）。\n将退出程序并自动更新到 {2}，完成后自动重启。", "Downloaded {0} ({1}).\nThe app will quit and update to {2}, then restart automatically.";
+    update_apply_now: "立即更新并重启", "Update & Restart Now";
+    update_open_dir: "打开下载文件夹", "Open Download Folder";
+    update_check_fail: "检查更新失败：{0}", "Check failed: {0}";
+    update_download_fail: "下载失败：{0}", "Download failed: {0}";
+    update_apply_fail: "更新失败：{0}", "Update failed: {0}";
+    update_busy: "已有更新操作在进行中", "An update is already in progress";
+    update_last_check: "上次检查：{0}", "Last check: {0}";
+    update_never: "从未", "never";
+    update_need_7z: "需要 7-Zip（7z.exe）解压更新包。请安装 7-Zip，或把 7z.exe 加入 PATH 后重试。", "7-Zip (7z.exe) is required to extract the update. Install 7-Zip or add 7z.exe to PATH, then retry.";
+    update_missing_pkg: "更新包不存在", "Update package not found";
+    update_missing_target: "目标目录不存在", "Target directory not found";
+    update_no_main: "更新后未找到主程序", "Main program not found after update";
+    update_no_install_dir: "无法确定安装目录", "Cannot determine install directory";
+    update_parse_fail: "解析更新信息失败", "Failed to parse release info";
+    update_no_asset: "最新 Release 没有可用的 .7z/.zip 安装包", "The latest release has no .7z/.zip package";
+    update_bad_format: "不支持的更新包格式", "Unsupported update package format";
+    update_extract_fail: "解压失败", "Extract failed";
+    update_extract_timeout: "解压超时", "Extract timed out";
+    update_copy_fail: "覆盖失败", "Copy failed";
+    update_too_small: "下载失败或文件过小", "Download failed or file too small";
+    update_save_fail: "保存下载文件失败", "Failed to save downloaded file";
+    update_settings: "检查更新", "Update";
+    update_auto_check: "自动检查更新（启动时）", "Check for updates on startup";
+    update_auto_help: "启动后按间隔自动检查 GitHub Releases，发现新版本时弹窗询问。0 天 = 关闭。默认 7 天。", "Checks GitHub Releases after startup on this interval and asks when a new version is found. 0 days = off. Default 7.";
+    update_interval_days: "检查间隔（天）", "Interval (days)";
     tip_new: "新建 (Ctrl+N)", "New (Ctrl+N)";
     tip_open: "打开 (Ctrl+O)", "Open (Ctrl+O)";
     tip_save: "保存 (Ctrl+S)", "Save (Ctrl+S)";
@@ -422,6 +462,33 @@ pub fn unsaved_named(name: &str) -> String {
 }
 pub fn version(v: &str) -> String {
     r1(t().version, v)
+}
+pub fn update_latest(v: impl std::fmt::Display) -> String {
+    r1(t().update_latest, v)
+}
+pub fn update_cur_latest(cur: impl std::fmt::Display, latest: impl std::fmt::Display) -> String {
+    r2(t().update_cur_latest, cur, latest)
+}
+pub fn update_found_auto(cur: impl std::fmt::Display, latest: impl std::fmt::Display) -> String {
+    r2(t().update_found_auto, cur, latest)
+}
+pub fn update_downloading(name: &str) -> String {
+    r1(t().update_downloading, name)
+}
+pub fn update_ready(name: &str, size: &str, ver: &str) -> String {
+    r3(t().update_ready, name, size, ver)
+}
+pub fn update_check_fail(e: impl std::fmt::Display) -> String {
+    r1(t().update_check_fail, e)
+}
+pub fn update_download_fail(e: impl std::fmt::Display) -> String {
+    r1(t().update_download_fail, e)
+}
+pub fn update_apply_fail(e: impl std::fmt::Display) -> String {
+    r1(t().update_apply_fail, e)
+}
+pub fn update_last_check(s: &str) -> String {
+    r1(t().update_last_check, s)
 }
 pub fn reloaded(name: &str) -> String {
     r1(t().reloaded, name)
