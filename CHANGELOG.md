@@ -23,7 +23,23 @@ Format based on [Keep a Changelog](https://keepachangelog.com/). / 格式基于 
 
 ### English
 
-_Legacy release: the original log below is Chinese only. / 旧版发布：下方为当时记录，仅中文。_
+- Source/preview double-click selects by CJK/Latin punctuation, triple-click selects the visual line, selections trim leading/trailing blanks (no more whole-paragraph double-click).
+- Find: F3 / Shift+F3 also jump while the find box is focused, changing the keyword jumps to the first hit; Excel searches cell by cell; Excel scrollbar drag no longer selects the last column.
+- XLS / XLSX / XLSM read-only preview (virtual grid): sheet tabs, frozen row/column headers, drag-select copy as TSV, Ctrl+wheel zoom, PgUp/PgDn switches sheets, outline lists sheet names.
+- PDF preview no longer idles: render visible pages only, coalesce stale rasters, stretch the old bitmap while zooming, drop off-screen textures; fast 1000-page scrollbar drag (page-top binary search, pause raster while dragging); double-click on text pages no longer opens the image overlay (100% ⇄ fit width).
+- DOC / DOCX read-only preview rebuilt: `office_oxide` layout model paginated directly (no Markdown round-trip), keeps headings / sizes / bold / colors / alignment / numbering / tables / images; Save As exports `.md`.
+- Session restore opens only the active tab's file; other tabs stay placeholders and load on switch (Vim-encrypted ones prompt for the password then).
+- Source large selections look the same while dragging and after release (opaque selection fill, full rows); fixed type-flash and ~2 s drag/Ctrl+A stalls (independent Arc per frame, selection paints blue without recoloring glyphs, off-screen rows drop meshes but keep glyphs).
+- Copying link text no longer inserts extra spaces; preview bare-text links accept only `http://` / `https://` (no more `k://` / `ftp://` drive misdetect); source bare URLs (drive, UNC, relative with extension) are Ctrl+click links.
+- Preview drag-select can start in block gaps and short-line trailing blanks; inline `` `code` `` chips join the selection.
+- Settings became a separate Windows dialog (GWLP_HWNDPARENT-owned, always in front, centered on open); Esc cancels input UIs (Vim password, unsaved close, quit, reload; IME off in the password box).
+- Vim encryption (zip / blowfish / blowfish2): password prompt on open, save writes back with the original method / salt / seed, password in memory only; File menu shows "Vim password" for encrypted files to re-enter it.
+- Tab right-click menu: close / close others / close all (save prompts for dirty tabs; close-others saves only the tabs being closed); hovering another top-level menu item switches to it; recent-file paths drop the `\\?\` prefix.
+- Outline scroll fix (highlight syncs only when the document scrolls); Explorer: single-click select / double-click open, double-click folders to expand, toolbar (up/back/forward/refresh, absolute path bar), right-click "set as workspace"; darker folder names.
+- Chinese / English switch (View menu / settings, stored in `uiLang`); Settings gained a master "enable logs" toggle (UI stalls written to `ui.log`).
+- Source recoloring is incremental per line (fences from the start), paragraph Galleys tolerate 64px wrap jitter; Ctrl+A / back-forward / heading jumps scroll instantly; undoing to the saved text marks the tab clean.
+- Inline `` `code` `` chips match the preview fill (incl. backticks); Ctrl+click `[text](#anchor)`, `[text](file.md)` / `file.md#anchor` jumps, `![alt](image)` opens the overlay.
+- AccessKit disabled (Windows UIA froze ~1 s on 2000-line sources); `cargo build --release` copies the exe and sibling `*.dll` to `release/`.
 
 ### 中文
 
@@ -49,7 +65,12 @@ _Legacy release: the original log below is Chinese only. / 旧版发布：下方
 
 ### English
 
-_Legacy release: the original log below is Chinese only. / 旧版发布：下方为当时记录，仅中文。_
+- Source task boxes `[ ]` / `[x]` get light-gray / light-green fills; monospace prefers Consolas (headings/bold use the same mono bold), line height 1.45, baselines aligned with YaHei.
+- Preview CJK/Latin mixed text splits by script and bottom-aligns per line (Latin Ubuntu baseline shifted down); source uses the same baseline.
+- Code-fold footer ellipsis changed to `...` (old `⋯` was missing from the font and showed as a hollow square).
+- Opening a file while an instance is running forwards to that window as a new tab and brings it forward; reopening the same file restores mode and position (remembered after close, debounced save in `session.json`).
+- Image read-only preview: contain-fit, wheel zoom, drag pan, double-click fit ⇄ 100%, `[`/`]` rotate, Ctrl+C / right-click copy, Save As png/jpg/bmp.
+- Sidebar tree selects whole rows (no text drag); session remembers the workspace root; build / run on Windows kills a running `rustmarkdown.exe` first.
 
 ### 中文
 
@@ -64,7 +85,20 @@ _Legacy release: the original log below is Chinese only. / 旧版发布：下方
 
 ### English
 
-_Legacy milestone: the original log below is Chinese only. / 旧里程碑：下方为当时记录，仅中文。_
+- M1 skeleton (eframe/egui, `wins: Vec<Win>`, main window only); multi-tab (open/close/switch/path de-dupe/drag reorder/middle-click close/unsaved prompt/Ctrl+Shift+T reopen); three-mode shell (source / side-by-side / preview, Ctrl+1/2/3, Ctrl+E); open / save / save-as, drag-and-drop, CLI paths.
+- M2: MdParser ported (blocks/inlines/tables/details/img, source line mapping); native preview (heading numbers, lists, task checks, quotes, syntect code, table widths, images, links); 180ms debounced reparse; `--selftest`.
+- App icon (window/taskbar/exe resource) with GUI subsystem (no console); `.lnk` support (incl. CJK target decoding fix); settings (tab width 2/3/4/8, heading numbers, max image width).
+- Preview image double-click overlay (fit area / wheel zoom / pan / Esc or backdrop close, right-click copy image/file); preview/editor scrollbars flush right with fixed expanded width, faster wheel.
+- Preview tables as a continuous grid (header fill, shared borders, top-aligned cells); fenced-code highlight (two-face, common languages and aliases, `text`/`log` uncolored); ` ```mermaid ` in pure Rust (source fallback on failure).
+- Top menu bar / line-icon toolbar (hover shows name and shortcut); fold by heading, fenced code over 10 lines starts folded ("show all"); read-only task lists, inline `<font color/style>` styles.
+- Markdown source highlight (vim-like: heading level colors, gray markers, links, syntect fences); source wraps by pane width on a pure-white background; real bold (YaHei Bold + mono bold).
+- Wheel still scrolls while dragging a selection; image overlay lost its black strip (close button only); fixed quote-bar overdraw, missing preview scrollbar, reversed right-aligned table text (LTR + left padding).
+- No-arg launch restores last files and modes (`session.json`), CLI paths open by argument; left outline sidebar (F4, filter highlight, level folding, scroll sync, click jump).
+- Side-by-side synced scroll (650ms echo suppression), blue bar on the caret block, cross-pane selection tints; after Ctrl+Z the caret stays at the change.
+- Version in the window title; back / forward (outline, anchors, in-doc relative links; cap 50; Alt+←/→).
+- DOC / DOCX read-only (office_oxide → Markdown → A4 pages; original never overwritten; Save As exports `.md`); PDF read-only (pdfium raster + text, lazy visible pages, yellow selection, Ctrl+C / right-click copy text, encrypted PDFs report failure).
+- Encoding auto-detect (UTF-8 BOM / UTF-16 / GBK) with save-back; external-change watch with auto reload (prompt if unsaved edits); tab right-click "move to new window" / tear-off and merge.
+- File menu "recent files" (last 20, de-duped, newest first); folder tree starts collapsed; PDF/Word zoom (Ctrl+wheel / Ctrl++- / Ctrl+0) with status percentages; Word pages centered; PgUp/PgDn pages in preview.
 
 ### 中文
 
